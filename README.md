@@ -1,4 +1,4 @@
-# 🎙️ VOXOPS Studio
+# VOXOPS Studio
 
 ## Speak a System. See the Architecture. Execute Operations. Auto-Heal Infrastructure.
 
@@ -13,7 +13,7 @@
 
 ---
 
-## 🏆 Hackathon Context
+## Hackathon Context
 
 VOXOPS Studio is built for the **AssemblyAI Voice Agent Hackathon 2026**, organized by **lablab.ai** and **AssemblyAI** (September 1–30, 2026). 
 
@@ -21,7 +21,7 @@ It utilizes the **AssemblyAI Voice Agent API** to achieve sub-second latency, na
 
 ---
 
-## 💡 The Core Problem & Solution
+## The Core Problem & Solution
 
 ### The Friction in System Engineering & Operations
 Building and operating software architectures usually requires switching between isolated, high-friction tools:
@@ -40,16 +40,16 @@ You speak naturally to design microservice architectures, analyze system risks, 
 
 ---
 
-## ✨ Dual Superpowers
+## Dual Superpowers
 
 VOXOPS Studio combines two breakthrough capabilities into a single unified platform:
 
-### 1. 🎨 Voice Canvas Architect
+### 1. Voice Canvas Architect
 * **Spoken Graph Synthesis**: Converts natural language into structured, editable diagram nodes (Actors, Services, Databases, Queues, Fallback Routes).
 * **Automated Risk Analysis**: Scans graph topology to detect Single Points of Failure (SPOFs), disconnected nodes, missing retry branches, or unhandled failure modes.
 * **Instant Export**: Export live architecture states to **Mermaid.js**, high-resolution **PNG**, or **Infrastructure-as-Code (Terraform / Docker Compose)**.
 
-### 2. ⚡ Autonomous Voice Operator
+### 2. Autonomous Voice Operator
 * **Real Tool Execution**: Performs validated, backend operations (service deployment, database failover, incident ticket creation, human operator handoffs).
 * **Barge-In / Interruption Support**: Supports instant conversational interruptions. If you cut the agent off mid-sentence, playback stops immediately and listening resumes.
 * **Failure Resilience & Honest Reporting**: If an underlying API or backend tool fails, the agent reports the failure accurately with diagnostic details and offers corrective paths—never hallucinating success.
@@ -57,12 +57,12 @@ VOXOPS Studio combines two breakthrough capabilities into a single unified platf
 
 ---
 
-## ⚙️ System Architecture
+## System Architecture
 
 ```text
                       ┌─────────────────────────┐
                       │          USER           │
-                      │  🎙️ Microphone / Web    │
+                      │    Microphone / Web     │
                       └────────────┬────────────┘
                                    │
                                    │ Web Audio Stream
@@ -113,7 +113,7 @@ VOXOPS Studio combines two breakthrough capabilities into a single unified platf
 
 ---
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 | Layer | Technology | Purpose |
 | --- | --- | --- |
@@ -127,7 +127,7 @@ VOXOPS Studio combines two breakthrough capabilities into a single unified platf
 
 ---
 
-## 🧠 Agent State Machine & Observability
+## Agent State Machine & Observability
 
 VOXOPS Studio models agent behavior through a strict, transparent state machine exposed directly in the UI telemetry panel:
 
@@ -185,7 +185,7 @@ VOXOPS Studio models agent behavior through a strict, transparent state machine 
 
 ---
 
-## 🔧 Tool System & JSON Schemas
+## Tool System & JSON Schemas
 
 The Voice Agent operates strictly through validated backend functions. It cannot execute arbitrary commands without schema verification.
 
@@ -235,31 +235,31 @@ The Voice Agent operates strictly through validated backend functions. It cannot
 
 ---
 
-## 🎬 Hackathon Demonstration Scenario
+## Hackathon Demonstration Scenario
 
 Our primary demonstration walks through a high-stakes infrastructure incident & architecture review:
 
 ```text
-1. 🎙️ User: "Create a resilient food delivery system with user auth, restaurant search, cart service, primary database, and Stripe payment gateway."
+1. User: "Create a resilient food delivery system with user auth, restaurant search, cart service, primary database, and Stripe payment gateway."
    └─► Agent executes `add_architecture_node` & `connect_components` in sequence. Visual graph populates on canvas.
 
-2. 🎙️ User: "Analyze the architecture for single points of failure."
+2. User: "Analyze the architecture for single points of failure."
    └─► Agent executes `analyze_structural_risks`, highlights Stripe node in RED, and speaks:
        "The Stripe Payment Gateway has no retry or backup fallback. If it fails, order checkout halts."
 
-3. 🎙️ User: "Add a backup PayPal route and connect a decision node for payment failover."
+3. User: "Add a backup PayPal route and connect a decision node for payment failover."
    └─► Agent updates graph live with decision logic and secondary payment path.
 
-4. 🎙️ User: "Simulate a Stripe gateway outage and execute failover now."
+4. User: "Simulate a Stripe gateway outage and execute failover now."
    └─► Agent calls `execute_failover_operation`. Canvas updates live: Stripe turns offline, secondary PayPal route activates.
 
-5. 🎙️ User (Interrupts mid-sentence): "Wait! Log a P1 incident ticket and export this to Mermaid."
+5. User (Interrupts mid-sentence): "Wait! Log a P1 incident ticket and export this to Mermaid."
    └─► Agent immediately cuts speech playback, processes interruption, creates Jira ticket `#INC-8921`, and opens Mermaid export panel.
 ```
 
 ---
 
-## 📂 Repository Structure
+## Repository Structure
 
 ```text
 voxops-studio/
@@ -304,7 +304,7 @@ voxops-studio/
 
 ---
 
-## 🚀 Quickstart & Setup
+## Quickstart & Setup
 
 ### Prerequisites
 * **Node.js**: v18.0.0 or higher
@@ -328,7 +328,7 @@ Edit `backend/.env` and add your AssemblyAI API key:
 ASSEMBLYAI_API_KEY=your_assemblyai_api_key_here
 PORT=8000
 ```
-> 🔒 **Security Note**: Credentials remain strictly on the server backend. Never expose API keys in frontend code.
+> **Security Note**: Credentials remain strictly on the server backend. Never expose API keys in frontend code.
 
 ### 3. Install & Start Backend
 ```bash
@@ -348,7 +348,7 @@ Open the local URL (e.g., `http://localhost:5173`) in your browser, grant microp
 
 ---
 
-## 🎯 Hackathon Judging Criteria Alignment
+## Hackathon Judging Criteria Alignment
 
 | Criteria | How VOXOPS Studio Wins |
 | --- | --- |
@@ -359,12 +359,12 @@ Open the local URL (e.g., `http://localhost:5173`) in your browser, grant microp
 
 ---
 
-## 📜 License
+## License
 
 This project is licensed under the [MIT License](LICENSE).
 
 ---
 
-## 🏷️ Status
+## Status
 
 Developed for the **AssemblyAI Voice Agent Hackathon 2026**. Prototype fully functional.
