@@ -7,10 +7,16 @@
   "scripts": {
     "dev": "node backend/api/server.js",
     "start": "node backend/api/server.js",
+    "ui": "node demo/voice-ui-demo.js",
+    "ui:sim": "node demo/voice-ui-demo.js --simulate",
+    "start:app": "node voice/start.js",
+    "build:exe": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-exe.ps1",
     "test": "node --test tests/"
   },
   "dependencies": {
     "assemblyai": "^4.41.1",
-    "node-record-lpcm16": "^1.0.1"
+    "node-record-lpcm16": "^1.0.1",
+    "onnxruntime-node": "^1.29.0",
+    "pngjs": "^7.0.0"
   }
 }

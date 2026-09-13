@@ -32,3 +32,219 @@ To prepare for the AssemblyAI integration and ensure secure API key handling, th
 **Result:** **PASS**
 * **Command Executed:** `node demo/mvp-demo.js`
 * **Validation:** The simulated integration test executed flawlessly. It successfully launched the application, simulated the correct typing actions (`typed "Dad"`), and reached the completed task state (`task status: done`), confirming no core codebase logic was broken during the setup phase.
+
+## 3. Real OCR + UIA Perception (extracted from Screen-AI)
+
+To replace the stub perception with real screen understanding, the PaddleOCR ONNX
+models and the Windows UI Automation scanner were extracted from the `Screen-AI`
+project and wired into a Node-native engine. See [`docs/OCR.md`](./docs/OCR.md).
+
+### What Was Done
+- **Real OCR engine:** added `backend/perception/paddle_ocr/` — a dependency-light
+  Node implementation of the PaddleOCR pipeline (DB text detection + CTC
+  recognition) running the Screen-AI ONNX models via `onnxruntime-node`.
+- **Models extracted:** `ocr_det_v3.onnx` + `ocr_rec_english.onnx` (from Screen-AI)
+  and the missing `ocr_rec_dict.txt` + `ocr_rec_config.json` (from the model's
+  Hugging Face repo). `scripts/fetch-ocr-models.mjs` reproduces them.
+- **Real UIA:** ported `screen_element_scanner/uia_scan.ps1` plus a driver/sensor so
+  structured Windows controls are available.
+- **Wiring:** `buildRealAgent` now runs Windows OCR (primary, unchanged) →
+  PaddleOCR ONNX → UIA as additive fallbacks.
+
+### Test Results
+
+#### OCR engine — unit
+**Result:** **PASS**
+* **Command Executed:** `node --test tests/paddle_ocr_unit.test.js`
+* **Validation:** CTC decode collapses repeats and drops the blank; dictionary
+  blank/char/space mapping holds; det post-process finds and unclips text regions.
+
+#### OCR engine — real ONNX inference
+**Result:** **PASS**
+* **Command Executed:** `node --test tests/paddle_ocr_model.test.js`
+* **Validation:** the real det+rec models recognized `"← File Edit View Help"` from
+  `tests/fixtures/menu_bar.png`.
+
+#### OCR demo (fixture + live screen)
+**Result:** **PASS**
+* **Commands Executed:** `node demo/ocr-demo.js --image tests/fixtures/menu_bar.png`
+  and `node demo/ocr-demo.js`
+* **Validation:** fixture OCR produced `"← File Edit View Help"`; the live capture
+  (1920×1080) produced 29 text lines in ~885 ms and mapped them into a `ScreenModel`
+  (recognized as the WhatsApp chat list with contact elements).
+
+#### UIA scanner
+**Result:** **PASS**
+* **Validation:** the scanner returned the live Windows UIA tree (role/label/bounds
+  per element), filtered to the foreground process when a foreground probe is set.
+
+#### Regression
+**Result:** **PASS**
+* **Validation:** all pre-existing tests still pass and `node demo/mvp-demo.js` is
+  unchanged; the new fallbacks do not run when Windows OCR already succeeds.
+
+### Notes / Limitations
+- Detector post-process is axis-aligned (no rotated boxes) — adequate for UI text.
+- ONNX inference runs on CPU (~0.6–0.9 s per 1920×1080 frame).
+- Screen capture and UIA require an interactive, unlocked Windows desktop session.
+- UIA does not expose browser web content, so it is a fallback rather than the
+  primary sensor for web apps.
+
+## 4. AssemblyAI Realtime Voice → Existing Agent Orchestrator
+
+Milestone: prove `real microphone → AssemblyAI realtime STT → final transcript →
+existing orchestrator.run()`, without touching perception or the agent.
+
+### What Was Done
+- Kept AssemblyAI isolated behind the existing `VoiceInterface`
+  (`voice/assemblyai/index.js`); the agent never imports the SDK.
+- `voice/assemblyai/transcriber.js` streams 16 kHz mono PCM from the microphone
+  through `client.streaming.transcriber(...)`. Only turns with
+  `end_of_turn === true` are emitted as `final`; interim updates are `partial`
+  (display only) and never reach the agent.
+- Added `onError(...)` to `VoiceInterface` and switched to the SDK's native
+  bounded reconnect (`maxConnectionRetries: 2`) instead of a competing loop.
+- Added `tests/voice_events.test.js` (unit + deterministic fixture simulation).
+
+### API verification (current official docs)
+- Surface: `client.streaming.transcriber({...})`, events `open | turn | error | close`,
+  `connect()`, `sendAudio(Buffer)`, `close()`.
+- Final turn is identified by `turn.end_of_turn === true`; mono 16-bit PCM @ 16 kHz.
+- Installed SDK: `assemblyai` 4.41.1.
+
+### Test Results
+
+#### Unit — partial vs final
+**Result:** **PASS**
+* **Command:** `node --test tests/voice_events.test.js`
+* **Validation:** partials never emit `final`; finals emit exactly once (deduped by
+  `turn_order`); empty/whitespace finals are ignored; transcripts are trimmed.
+
+#### Fixture / demo simulation
+**Result:** **PASS**
+* **Validation:** deterministic voice-event simulation — three `partial` events produce
+  **0** orchestrator calls; one `final` event produces **exactly 1** call to the real
+  `orchestrator.run("Open WhatsApp and search for Dad")`.
+
+#### Live microphone
+**Result:** **BLOCKED BY ENVIRONMENT**
+* No `ASSEMBLYAI_API_KEY` configured and no SoX/microphone backend on this machine.
+* `node demo/voice-mvp-demo.js` fails cleanly: `[voice:error] ASSEMBLYAI_API_KEY is not configured`.
+* Not claimed as working.
+
+#### Regression
+**Result:** **PASS**
+* Full suite: `node --test "tests/**/*.test.js"` → 21/21 (MVP, real-desktop,
+  OCR/PaddleOCR, UIA, and voice).
+
+## 5. Floating Voice UI (reactive voice core)
+
+A minimal always-on-top WPF overlay whose centerpiece is an animated vertical-bar
+"voice core" driven by REAL microphone amplitude. See [`docs/UI.md`](./docs/UI.md).
+
+### What Was Done
+- `ui/screenai-voice-ui.ps1` — borderless, translucent, topmost WPF window; 11
+  rounded bars with center-weighted, smoothed motion; global **Ctrl+Space**
+  hotkey (`GetAsyncKeyState`), Escape to cancel, click to toggle.
+- `voice/ui_bridge.js` — state machine (`idle → listening → processing → working →
+  success | failure → idle`), amplitude smoothing/throttling, and REAL step→label
+  mapping via a `Logger.on` subscription.
+- `AssemblyAITranscriber` now emits `audio(level)` from the **same PCM chunks**
+  sent to AssemblyAI (`pcm16Level`), surfaced as `VoiceInterface.onAudio`.
+- `demo/voice-ui-demo.js` — real agent + mic/AssemblyAI (`--simulate` for a
+  scripted transcript, clearly labelled).
+
+### Test Results
+
+#### Bridge unit tests
+**Result:** **PASS**
+* **Command:** `node --test tests/voice_ui_bridge.test.js`
+* **Validation:** partials never execute the agent; the final turn runs the real
+  orchestrator exactly once; states go listening→processing→working→success;
+  `working` carries the real step label (`Opening WhatsApp...`); amplitude frames
+  rise toward louder input and stay normalised; failure reports `Couldn't verify`
+  and retry re-runs; cancel stops the voice and returns to idle; a missing
+  microphone reports `Microphone unavailable` without crashing.
+
+#### Overlay self-test
+**Result:** **PASS**
+* **Command:** `powershell -NoProfile -ExecutionPolicy Bypass -File ui\screenai-voice-ui.ps1 -SelfTest`
+* **Validation:** window builds, animation frames run with synthetic amplitude,
+  dispatcher shuts down cleanly (`exit=0`).
+
+#### End-to-end demo (scripted voice, REAL agent)
+**Result:** **PASS**
+* **Command:** `node demo/voice-ui-demo.js --simulate --exit-after 32000`
+* **Validation:** overlay spawned, activated, streamed partials, ran the REAL
+  Windows agent to `task_done`, showed success, then collapsed and exited with no
+  leftover processes.
+
+#### Live microphone through the overlay
+**Result:** **BLOCKED BY ENVIRONMENT**
+* No `ASSEMBLYAI_API_KEY` and no SoX/microphone backend on this machine; the real
+  hotkey→mic→AssemblyAI path could not be exercised. Not claimed as working.
+
+#### Regression
+**Result:** **PASS**
+* Full suite: `node --test "tests/**/*.test.js"` → 27/27.
+
+## 6. Windows Launcher (ScreenAI-Voice.exe)
+
+A small native `.exe` that boots the EXISTING application with a double-click.
+See [`docs/LAUNCHER.md`](./docs/LAUNCHER.md).
+
+### What Was Done
+- `scripts/launcher/ScreenAiVoice.cs` — WinExe compiled with the in-box .NET
+  Framework `csc.exe` (no runtime to install, no Electron/Tauri). Resolves the
+  app root from the executable directory, finds `node.exe`, redirects output to
+  `logs/screenai-voice.log`, detects `SCREENAI_READY` / `SCREENAI_FATAL`, shows a
+  clear dialog on failure, and uses a **Windows Job Object** so only its own
+  processes are cleaned up.
+- `voice/start.js` — production entry point that composes the existing
+  `buildRealAgent` → `VoiceInterface` → `VoiceUiBridge` stack (no business logic).
+- `voice/app_paths.js` / `voice/scripted_voice.js` — path/arg resolution and the
+  dev-only scripted voice (single source of truth, shared with the demo).
+- `scripts/build-exe.ps1` — reproducible build producing `dist/ScreenAI-Voice.exe`
+  plus a portable `dist/app/`. Never copies `env\.env`.
+- `npm run build:exe`, `npm start:app`, and a `Quit Screen-AI` right-click item.
+
+### Test Results
+
+#### Launcher unit tests
+**Result:** **PASS**
+* **Command:** `node --test tests/launcher.test.js`
+* **Validation:** production is the default (simulation must be explicit); the
+  app root resolves from the executable directory (both `dist/app` and project
+  layouts); the production entry refuses to start without `ASSEMBLYAI_API_KEY`
+  (exit 2 + `SCREENAI_FATAL`) and never falls into simulation mode; the scripted
+  voice emits the partials then one final; build inputs exist.
+
+#### Build
+**Result:** **PASS**
+* **Command:** `npm run build:exe`
+* **Validation:** `dist/ScreenAI-Voice.exe` compiled; `dist/app` verified to
+  contain `voice/start.js`, the WPF UI, and intact `assemblyai`/`onnxruntime-node`
+  `dist` folders; `env\.env` absent from `dist`.
+
+#### Executable boot + error handling
+**Result:** **PASS**
+* **Validation:** running `dist\ScreenAI-Voice.exe --no-dialog` resolved
+  `dist\app`, found Node, started `voice/start.js`, detected
+  `SCREENAI_FATAL: ASSEMBLYAI_API_KEY is not configured`, logged it, and exited 1.
+* With a dummy key set, the launcher booted the app to `SCREENAI_READY` (~1.8 s,
+  WPF overlay up) and logged the missing-SoX warning.
+* Killing the launcher left **zero** leftover Node/PowerShell processes (Job
+  Object cleanup), confirming only its own processes are terminated.
+* The single-instance mutex made a second launch exit 0 without starting a
+  duplicate.
+
+#### Regression
+**Result:** **PASS**
+* Full suite: `node --test "tests/**/*.test.js"` → 33/33 (one run showed a single
+  non-reproducing failure in the environment-dependent live-desktop test; two
+  subsequent full runs were clean).
+
+#### Live microphone via the EXE
+**Result:** **BLOCKED BY ENVIRONMENT**
+* No `ASSEMBLYAI_API_KEY` and no SoX/microphone backend on this machine, so the
+  full double-click → speak → act path could not be exercised. Not claimed.

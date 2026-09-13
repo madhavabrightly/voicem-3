@@ -15,18 +15,47 @@
  *   final(text)   completed user turn (safe to hand to the agent, once)
  *   error(error)  stream/microphone failure
  *   close(info)   connection closed
+ *   audio(level)  microphone RMS level (0..1) — drives the floating UI voice core
  */
 import { spawnSync } from "node:child_process";
 import { AssemblyAI } from "assemblyai";
 import recordLpcm16 from "node-record-lpcm16";
 
-/** Realtime connection configuration (16 kHz mono PCM16). */
+/**
+ * Realtime connection configuration (mono 16-bit PCM @ 16 kHz — the SDK default).
+ *
+ * Verified against the current AssemblyAI streaming docs and the installed SDK
+ * (assemblyai 4.41.1):
+ *   - `client.streaming.transcriber({...})` with `open | turn | error | close`
+ *   - a turn is final when `turn.end_of_turn === true`
+ *   - bounded reconnect is handled INSIDE the SDK via `maxConnectionRetries`,
+ *     so we configure it here instead of building a competing retry loop.
+ */
 export const CONNECTION_PARAMS = {
   sampleRate: 16000,
-  speechModel: "universal-3-6-pro",
+  speechModel: process.env.ASSEMBLYAI_SPEECH_MODEL || "universal-3-6-pro",
   mode: "balanced",
   formatTurns: true,
+  // SDK-native bounded reconnect for transient connection failures (no infinite loop).
+  maxConnectionRetries: 2,
+  connectionRetryDelay: 500,
 };
+
+/**
+ * Normalised RMS level (0..1) of a mono 16-bit little-endian PCM buffer.
+ * The floating UI's voice core is driven from the SAME audio chunks that are
+ * streamed to AssemblyAI — never a second, competing microphone capture.
+ */
+export function pcm16Level(buffer) {
+  const samples = Math.floor(buffer.length / 2);
+  if (samples <= 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples; i++) {
+    const s = buffer.readInt16LE(i * 2) / 32768;
+    sum += s * s;
+  }
+  return Math.sqrt(sum / samples);
+}
 
 export class AssemblyAITranscriber {
   /**
@@ -128,6 +157,8 @@ export class AssemblyAITranscriber {
 
     this.audioStream.on("data", (chunk) => {
       if (this.transcriber) this.transcriber.sendAudio(chunk);
+      // Level is measured from the SAME chunk sent to AssemblyAI.
+      this._emit("audio", pcm16Level(chunk));
     });
     this.audioStream.on("error", (error) => {
       this._logError("[voice:error] Microphone unavailable");

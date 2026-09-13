@@ -1,0 +1,46 @@
+{
+  "generatedAt": "2026-09-13T08:59:37.249Z",
+  "modelDir": "C:\\Users\\brigh\\Desktop\\trying_new\\vm3\\voice-agent\\backend\\perception\\models",
+  "notes": [
+    "PaddleOCR ONNX det+rec extracted from Screen-AI; dictionary from monkt/paddleocr-onnx.",
+    "Rec model output is N x T x 438 (CTC); dictionary has one character per line."
+  ],
+  "records": [
+    {
+      "file": "ocr_det_v3.onnx",
+      "role": "PP-OCR DB text-region detector",
+      "status": "copied",
+      "bytes": 2429873,
+      "sha256": "ee40e80071ba3a320d4efda75f3e22047a7d049e9bf7bcaaf9daea23fc21b935",
+      "source": "C:/Users/brigh/Desktop/trying_new/Screen-AI/ai_pc_operator/data/models",
+      "url": "https://huggingface.co/monkt/paddleocr-onnx/resolve/main/detection/v3/det.onnx"
+    },
+    {
+      "file": "ocr_rec_english.onnx",
+      "role": "PP-OCRv5 English CTC text recognizer (438 classes)",
+      "status": "copied",
+      "bytes": 7830888,
+      "sha256": "4e16deb22c4da6468bdca539b2cd3c8687825538b67109177c47d359ab994cd7",
+      "source": "C:/Users/brigh/Desktop/trying_new/Screen-AI/ai_pc_operator/data/models",
+      "url": "https://huggingface.co/monkt/paddleocr-onnx/resolve/main/languages/english/rec.onnx"
+    },
+    {
+      "file": "ocr_rec_dict.txt",
+      "role": "CTC character dictionary (one character per line)",
+      "status": "downloaded",
+      "bytes": 1416,
+      "sha256": "e025a66d31f327ba0c232e03f407ae8d105e1e709e7ccb3f408aa778c24e70d6",
+      "source": "https://huggingface.co/monkt/paddleocr-onnx/resolve/main/languages/english/dict.txt",
+      "url": "https://huggingface.co/monkt/paddleocr-onnx/resolve/main/languages/english/dict.txt"
+    },
+    {
+      "file": "ocr_rec_config.json",
+      "role": "Model card / preprocessing notes",
+      "status": "downloaded",
+      "bytes": 1038,
+      "sha256": "c7decf6d184bd44ed5dca9a5e7e4bd208d0bd9747e6d9d284de9e0bee2d22f6a",
+      "source": "https://huggingface.co/monkt/paddleocr-onnx/resolve/main/languages/english/config.json",
+      "url": "https://huggingface.co/monkt/paddleocr-onnx/resolve/main/languages/english/config.json"
+    }
+  ]
+}

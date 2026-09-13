@@ -71,7 +71,10 @@ if (!process.env.ASSEMBLYAI_API_KEY) {
 
 const voice = createVoiceHandler(orchestrator, {
   logger: console,
-  onUserTurn: (transcript) => console.log(`\nUSER:\n${transcript}.\n`),
+  onUserTurn: (transcript) => {
+    console.log(`\nUSER:\n${transcript}.\n`);
+    console.log(`[agent] Received command:\n       ${transcript}\n`);
+  },
   tts: async (text) => {
     console.log(`\nAGENT:\n${text}\n`);
     return text;

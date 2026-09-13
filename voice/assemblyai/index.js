@@ -22,6 +22,8 @@ export class VoiceInterface {
    * @param {string} [opts.baseUrl] AssemblyAI base URL (defaults to ASSEMBLYAI_BASE_URL env)
    * @param {Function} [opts.onTranscript] async (text) => voiceAgentResponse; proves the loop
    * @param {Function} [opts.onPartial] (text) => void; display-only interim transcripts
+   * @param {Function} [opts.onError] (error) => void; stream/microphone failures
+   * @param {Function} [opts.onAudio] (level) => void; microphone RMS level (0..1)
    * @param {Function} [opts.tts] async (text) => audioOut
    * @param {object} [opts.logger] console-like { log, error } (default console)
    * @param {object} [opts.connectionParams] realtime connection overrides
@@ -32,6 +34,8 @@ export class VoiceInterface {
     baseUrl = process.env.ASSEMBLYAI_BASE_URL,
     onTranscript,
     onPartial,
+    onError,
+    onAudio,
     tts,
     logger = console,
     connectionParams = {},
@@ -41,6 +45,8 @@ export class VoiceInterface {
     this.baseUrl = (baseUrl || "https://api.assemblyai.com").replace(/\/+$/, "");
     this._onTranscript = onTranscript || (async () => "Done.");
     this._onPartial = onPartial || null;
+    this._onError = onError || null;
+    this._onAudio = onAudio || null;
     this.tts = tts || (async (text) => text);
     this.logger = logger;
     this.connectionParams = connectionParams;
@@ -62,6 +68,18 @@ export class VoiceInterface {
     return this;
   }
 
+  /** Register the callback for transcriber/stream/microphone errors. */
+  onError(callback) {
+    this._onError = callback;
+    return this;
+  }
+
+  /** Register the callback for microphone RMS levels (0..1) — drives the UI core. */
+  onAudio(callback) {
+    this._onAudio = callback;
+    return this;
+  }
+
   async start() {
     if (this.listening) return { ok: true, listening: true };
     if (!this.transcriber) {
@@ -77,6 +95,10 @@ export class VoiceInterface {
     if (!this._wired) {
       if (this._onPartial) this.transcriber.on("partial", (text) => this._onPartial(text));
       this.transcriber.on("final", (text) => this._handleFinal(text));
+      this.transcriber.on("error", (error) => this._handleError(error));
+      this.transcriber.on("audio", (level) => {
+        if (this._onAudio) this._onAudio(level);
+      });
       this._wired = true;
     }
     try {
@@ -111,6 +133,16 @@ export class VoiceInterface {
     }
   }
 
+  /** Forward a transcriber/stream/microphone error to the onError callback. */
+  _handleError(error) {
+    if (!this._onError) return;
+    try {
+      this._onError(error);
+    } catch (err) {
+      this._error(`[voice:error] ${err?.message || err}`);
+    }
+  }
+
   _error(line) {
     (this.logger.error || this.logger.log).call(this.logger, line);
   }
@@ -130,11 +162,12 @@ export class VoiceInterface {
  * Builds the voice<->agent bridge: given an orchestrator, wire a
  * finalized transcript to a full agent run and speak the result.
  */
-export function createVoiceHandler(orchestrator, { tts, onPartial, onUserTurn, logger = console, connectionParams } = {}) {
+export function createVoiceHandler(orchestrator, { tts, onPartial, onError, onUserTurn, logger = console, connectionParams } = {}) {
   return new VoiceInterface({
     logger,
     connectionParams,
     onPartial,
+    onError,
     onTranscript: async (transcript) => {
       if (onUserTurn) onUserTurn(transcript);
       try {
