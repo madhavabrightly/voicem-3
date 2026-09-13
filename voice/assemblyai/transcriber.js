@@ -159,6 +159,14 @@ export class AssemblyAITranscriber {
     this._started = true;
   }
 
+  /**
+   * Directly process a turn event (used by test harnesses and streaming bridge).
+   * @param {object} event AssemblyAI turn object
+   */
+  _handleTurn(event) {
+    this.pipeline._handleAssemblyAiTurn(event);
+  }
+
   async stop() {
     if (!this._started) return;
     await this.pipeline.stop();
