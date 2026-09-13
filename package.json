@@ -11,7 +11,7 @@
     "ui:sim": "node demo/voice-ui-demo.js --simulate",
     "start:app": "node voice/start.js",
     "build:exe": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-exe.ps1",
-    "test": "node --test tests/"
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "assemblyai": "^4.41.1",

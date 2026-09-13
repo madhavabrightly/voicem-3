@@ -4,41 +4,33 @@
  * Single responsibility:
  *   microphone -> AssemblyAI realtime streaming -> transcript events
  *
- * This module knows NOTHING about the agent, planning, perception, tools,
- * Windows automation or screen state. It only turns live microphone PCM into
- * partial/final transcript events. Everything else lives above it, behind the
- * existing VoiceInterface.
+ * This module is wired to the P1 Voice Input Pipeline (Tickets 001–100),
+ * providing 16kHz PCM capture, real RMS amplitude, VAD silence tracking,
+ * resilience, and turn deduplication.
  *
  * Events:
- *   open(event)   session established
- *   partial(text) interim transcript (display only — never a command)
- *   final(text)   completed user turn (safe to hand to the agent, once)
- *   error(error)  stream/microphone failure
- *   close(info)   connection closed
- *   audio(level)  microphone RMS level (0..1) — drives the floating UI voice core
+ *   open(event)       session established
+ *   partial(text)     interim transcript (display only — never a command)
+ *   final(text)       completed user turn (safe to hand to the agent, once)
+ *   level(data)       real-time audio amplitude (RMS + EMA)
+ *   audio(level)      microphone RMS level (0..1) — drives the floating UI voice core
+ *   error(error)      stream/microphone failure
+ *   close(info)       connection closed
  */
-import { spawnSync } from "node:child_process";
-import { AssemblyAI } from "assemblyai";
-import recordLpcm16 from "node-record-lpcm16";
+import {
+  VoiceInputPipeline,
+  DEFAULT_CONNECTION_PARAMS,
+} from "../../pipelines/voice_input/index.js";
 
-/**
- * Realtime connection configuration (mono 16-bit PCM @ 16 kHz — the SDK default).
- *
- * Verified against the current AssemblyAI streaming docs and the installed SDK
- * (assemblyai 4.41.1):
- *   - `client.streaming.transcriber({...})` with `open | turn | error | close`
- *   - a turn is final when `turn.end_of_turn === true`
- *   - bounded reconnect is handled INSIDE the SDK via `maxConnectionRetries`,
- *     so we configure it here instead of building a competing retry loop.
- */
+/** Realtime connection configuration (16 kHz mono PCM16). */
 export const CONNECTION_PARAMS = {
   sampleRate: 16000,
   speechModel: process.env.ASSEMBLYAI_SPEECH_MODEL || "universal-3-6-pro",
   mode: "balanced",
   formatTurns: true,
-  // SDK-native bounded reconnect for transient connection failures (no infinite loop).
   maxConnectionRetries: 2,
   connectionRetryDelay: 500,
+  ...DEFAULT_CONNECTION_PARAMS,
 };
 
 /**
@@ -64,8 +56,15 @@ export class AssemblyAITranscriber {
    * @param {object} [opts.connectionParams] overrides for CONNECTION_PARAMS
    * @param {object} [opts.logger] console-like { log, error } (default console)
    * @param {string} [opts.recorder] node-record-lpcm16 recorder (default "sox")
+   * @param {object} [opts.pipeline] injectable VoiceInputPipeline
    */
-  constructor({ apiKey = process.env.ASSEMBLYAI_API_KEY, connectionParams = {}, logger = console, recorder = "sox" } = {}) {
+  constructor({
+    apiKey = process.env.ASSEMBLYAI_API_KEY,
+    connectionParams = {},
+    logger = console,
+    recorder = "sox",
+    pipeline = null,
+  } = {}) {
     this.apiKey = apiKey || null;
     this.connectionParams = { ...CONNECTION_PARAMS, ...connectionParams };
     this.logger = logger;
@@ -77,8 +76,58 @@ export class AssemblyAITranscriber {
     this.audioStream = null;
 
     this._listeners = new Map();
-    this._finalizedTurns = new Set();
     this._started = false;
+
+    // Wire to the P1 Voice Input Pipeline
+    this.pipeline =
+      pipeline ||
+      new VoiceInputPipeline({
+        apiKey: this.apiKey,
+        connectionParams: this.connectionParams,
+        logger: this.logger,
+        components: {
+          recorder: this.recorder,
+        },
+      });
+
+    this._wirePipelineEvents();
+  }
+
+  _wirePipelineEvents() {
+    this.pipeline.assemblyAi.on("open", (evt) => {
+      this._emit("open", evt);
+    });
+
+    this.pipeline.on("partial_transcript", (p) => {
+      this._emit("partial", p.text);
+    });
+
+    this.pipeline.on("final_transcript", (f) => {
+      this._emit("final", f.text);
+    });
+
+    this.pipeline.on("audio_level", (levelData) => {
+      this._emit("level", levelData);
+      this._emit("amplitude", levelData);
+      // Normalized float 0..1 for UI voice core
+      this._emit("audio", levelData.smoothed);
+    });
+
+    this.pipeline.on("speech_complete", (data) => {
+      this._emit("speech_complete", data);
+    });
+
+    this.pipeline.on("mic_error", (err) => {
+      this._emit("error", err);
+    });
+
+    this.pipeline.on("assemblyai_error", (err) => {
+      this._emit("error", err);
+    });
+
+    this.pipeline.assemblyAi.on("close", (info) => {
+      this._emit("close", info);
+    });
   }
 
   on(event, callback) {
@@ -92,136 +141,31 @@ export class AssemblyAITranscriber {
       try {
         cb(payload);
       } catch (err) {
-        this._logError(`[voice:error] ${err?.message || err}`);
+        (this.logger.error || this.logger.log).call(this.logger, `[voice:error] ${err?.message || err}`);
       }
     }
-  }
-
-  _log(line) {
-    this.logger.log(line);
-  }
-
-  _logError(line) {
-    (this.logger.error || this.logger.log).call(this.logger, line);
   }
 
   async start() {
     if (this._started) return;
-    if (!this.apiKey) throw new Error("ASSEMBLYAI_API_KEY is not configured");
-    if (!this._recorderAvailable()) throw new Error("Microphone unavailable");
 
-    this.client = new AssemblyAI({ apiKey: this.apiKey });
-    this.transcriber = this.client.streaming.transcriber(this.connectionParams);
+    await this.pipeline.start();
 
-    this.transcriber.on("open", (event) => {
-      this._log(`[voice] Session opened: ${event?.id ?? "unknown"}`);
-      this._emit("open", event);
-    });
-    this.transcriber.on("turn", (event) => this._handleTurn(event));
-    this.transcriber.on("error", (error) => {
-      this._logError("[voice:error] AssemblyAI stream error");
-      this._emit("error", error);
-    });
-    this.transcriber.on("close", (code, reason) => {
-      this._log("[voice] AssemblyAI connection closed");
-      this._emit("close", { code, reason });
-    });
-
-    try {
-      await this.transcriber.connect();
-    } catch {
-      throw new Error("AssemblyAI connection failed");
-    }
-
-    this._startMicrophone();
+    // Mirror instances for backward compatibility
+    this.transcriber = this.pipeline.assemblyAi.transcriber;
+    this.client = this.pipeline.assemblyAi.client;
+    this.recording = this.pipeline.mic.activeRecording;
+    this.audioStream = this.pipeline.mic.audioStream;
     this._started = true;
   }
 
-  /** Probes for the SoX binary so a missing recorder is a clean error, not ENOENT. */
-  _recorderAvailable() {
-    if (this.recorder !== "sox") return true;
-    const probe = spawnSync("sox", ["--version"], { stdio: "ignore" });
-    return !probe.error;
-  }
-
-  _startMicrophone() {
-    const recording = recordLpcm16.record({
-      sampleRate: this.connectionParams.sampleRate,
-      channels: 1,
-      recorder: this.recorder,
-      audioType: "raw", // headerless PCM16 — streamed straight to AssemblyAI
-      endOnSilence: false,
-    });
-    this.recording = recording;
-    this.audioStream = recording.stream();
-
-    this.audioStream.on("data", (chunk) => {
-      if (this.transcriber) this.transcriber.sendAudio(chunk);
-      // Level is measured from the SAME chunk sent to AssemblyAI.
-      this._emit("audio", pcm16Level(chunk));
-    });
-    this.audioStream.on("error", (error) => {
-      this._logError("[voice:error] Microphone unavailable");
-      this._emit("error", error);
-    });
-    // node-record-lpcm16 spawns SoX; guard the child so a spawn failure is handled.
-    if (recording.process) {
-      recording.process.on("error", (error) => {
-        this._logError("[voice:error] Microphone unavailable");
-        this._emit("error", error);
-      });
-    }
-  }
-
-  _handleTurn(event) {
-    const text = (event?.transcript ?? "").trim();
-    const isFinal = event?.end_of_turn === true;
-
-    if (!isFinal) {
-      if (text) {
-        this._log(`[voice] partial: ${text}`);
-        this._emit("partial", text);
-      }
-      return;
-    }
-
-    // A final turn must execute downstream exactly once. AssemblyAI may repeat
-    // the completed turn; key on turn_order so only the first is emitted.
-    const turnOrder = event?.turn_order;
-    if (turnOrder !== undefined) {
-      if (this._finalizedTurns.has(turnOrder)) return;
-      this._finalizedTurns.add(turnOrder);
-    }
-
-    if (!text) return; // ignore empty / whitespace-only finals
-
-    this._log(`[voice] final: ${text}`);
-    this._emit("final", text);
-  }
-
   async stop() {
-    if (this.recording) {
-      try {
-        this.recording.stop();
-      } catch {
-        // already stopped
-      }
-      this.recording = null;
-    }
-    if (this.audioStream) {
-      this.audioStream.removeAllListeners("data");
-      this.audioStream.removeAllListeners("error");
-      this.audioStream = null;
-    }
-    if (this.transcriber) {
-      try {
-        await this.transcriber.close(true, 3000);
-      } catch {
-        // connection already gone
-      }
-      this.transcriber = null;
-    }
+    if (!this._started) return;
+    await this.pipeline.stop();
+    this.transcriber = null;
     this.client = null;
+    this.recording = null;
+    this.audioStream = null;
     this._started = false;
   }
 }

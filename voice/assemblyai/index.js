@@ -8,12 +8,12 @@
  *   - voice output (TTS)
  *   I/O only — all intelligence lives in the Agent Orchestrator.
  *
- * It is intentionally isolated: swapping speech providers touches only
- * this directory. The agent never imports assemblyai or the transcriber.
+ * Wired to P1 Voice Input Pipeline (Tickets 001–100).
  */
 import { AssemblyAITranscriber } from "./transcriber.js";
 
 export { AssemblyAITranscriber, CONNECTION_PARAMS } from "./transcriber.js";
+export { VoiceInputPipeline } from "../../pipelines/voice_input/index.js";
 
 export class VoiceInterface {
   /**
@@ -24,6 +24,7 @@ export class VoiceInterface {
    * @param {Function} [opts.onPartial] (text) => void; display-only interim transcripts
    * @param {Function} [opts.onError] (error) => void; stream/microphone failures
    * @param {Function} [opts.onAudio] (level) => void; microphone RMS level (0..1)
+   * @param {Function} [opts.onAudioLevel] ({ normalized, smoothed, isReal }) => void; real amplitude
    * @param {Function} [opts.tts] async (text) => audioOut
    * @param {object} [opts.logger] console-like { log, error } (default console)
    * @param {object} [opts.connectionParams] realtime connection overrides
@@ -36,6 +37,7 @@ export class VoiceInterface {
     onPartial,
     onError,
     onAudio,
+    onAudioLevel,
     tts,
     logger = console,
     connectionParams = {},
@@ -47,6 +49,7 @@ export class VoiceInterface {
     this._onPartial = onPartial || null;
     this._onError = onError || null;
     this._onAudio = onAudio || null;
+    this._onAudioLevel = onAudioLevel || null;
     this.tts = tts || (async (text) => text);
     this.logger = logger;
     this.connectionParams = connectionParams;
@@ -80,6 +83,15 @@ export class VoiceInterface {
     return this;
   }
 
+  /** Register the callback for real audio amplitude. */
+  onAudioLevel(callback) {
+    this._onAudioLevel = callback;
+    if (this.transcriber && this._wired) {
+      this.transcriber.on("level", callback);
+    }
+    return this;
+  }
+
   async start() {
     if (this.listening) return { ok: true, listening: true };
     if (!this.transcriber) {
@@ -94,6 +106,7 @@ export class VoiceInterface {
     // never register a second "final" handler (which would double-execute).
     if (!this._wired) {
       if (this._onPartial) this.transcriber.on("partial", (text) => this._onPartial(text));
+      if (this._onAudioLevel) this.transcriber.on("level", (lvl) => this._onAudioLevel(lvl));
       this.transcriber.on("final", (text) => this._handleFinal(text));
       this.transcriber.on("error", (error) => this._handleError(error));
       this.transcriber.on("audio", (level) => {
@@ -162,12 +175,14 @@ export class VoiceInterface {
  * Builds the voice<->agent bridge: given an orchestrator, wire a
  * finalized transcript to a full agent run and speak the result.
  */
-export function createVoiceHandler(orchestrator, { tts, onPartial, onError, onUserTurn, logger = console, connectionParams } = {}) {
+export function createVoiceHandler(orchestrator, { tts, onPartial, onError, onAudio, onAudioLevel, onUserTurn, logger = console, connectionParams } = {}) {
   return new VoiceInterface({
     logger,
     connectionParams,
     onPartial,
     onError,
+    onAudio,
+    onAudioLevel,
     onTranscript: async (transcript) => {
       if (onUserTurn) onUserTurn(transcript);
       try {
