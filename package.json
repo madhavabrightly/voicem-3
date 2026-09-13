@@ -1,0 +1,16 @@
+{
+  "name": "voice-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Voice-controlled computer agent: Voice -> Understand -> Observe -> Act -> Verify -> Voice response",
+  "scripts": {
+    "dev": "node backend/api/server.js",
+    "start": "node backend/api/server.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "assemblyai": "^4.41.1",
+    "node-record-lpcm16": "^1.0.1"
+  }
+}

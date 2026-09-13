@@ -1,0 +1,19 @@
+{
+  "perception": {
+    "priority": ["uia", "ocr", "opencv", "vision", "coordinate"],
+    "strategy": "stack",
+    "confidenceThreshold": 0.6
+  },
+  "agent": {
+    "maxRetriesPerAction": 3,
+    "verifyEveryAction": true,
+    "requireConfirmationFor": ["high", "medium"]
+  },
+  "assemblyai": {
+    "host": "localhost",
+    "port": 8080
+  },
+  "tools": {
+    "defaultAppTimeoutMs": 5000
+  }
+}
