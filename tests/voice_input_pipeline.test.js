@@ -582,3 +582,75 @@ test("100. Verify complete voice-input pipeline", async () => {
   assert.equal(stopResult.ok, true);
   assert.equal(pipeline.getState().uiState, VoiceUiState.IDLE);
 });
+
+test("101. Verify deduplication when comment is said twice", async () => {
+  const processor = new TranscriptProcessor();
+  const executedTurns = [];
+  processor.on("final", (turn) => executedTurns.push(turn.text));
+
+  // User says partial twice: "search for Dad... search for Dad"
+  const p1 = processor.processTurnEvent({ transcript: "search for Dad", end_of_turn: false, turn_order: 1 });
+  const p2 = processor.processTurnEvent({ transcript: "search for Dad", end_of_turn: false, turn_order: 1 });
+  assert.equal(p1.execute, false);
+  assert.equal(p2.execute, false);
+
+  // User turn completes: "search for Dad"
+  const f1 = processor.processTurnEvent({ transcript: "search for Dad", end_of_turn: true, turn_order: 1 });
+  assert.equal(f1.execute, true);
+
+  // Duplicate turn arrives (same turn_order)
+  const f2 = processor.processTurnEvent({ transcript: "search for Dad", end_of_turn: true, turn_order: 1 });
+  assert.equal(f2.execute, false);
+  assert.equal(f2.reason, "duplicate_turn_order");
+
+  // Repeated identical comment in same stream (new turn_order)
+  const f3 = processor.processTurnEvent({ transcript: "search for Dad", end_of_turn: true, turn_order: 2 });
+  assert.equal(f3.execute, false);
+  assert.equal(f3.reason, "duplicate_content");
+
+  // Exact 1 execution occurred despite repeated speech
+  assert.equal(executedTurns.length, 1);
+  assert.equal(executedTurns[0], "search for Dad");
+
+  // New activation clears deduplication and allows legitimate new command
+  processor.clearForNewActivation();
+  const f4 = processor.processTurnEvent({ transcript: "search for Dad", end_of_turn: true, turn_order: 1 });
+  assert.equal(f4.execute, true);
+  assert.equal(executedTurns.length, 2);
+});
+
+test("102. Verify self-healing pipeline recovery on unexpected error", async () => {
+  const mockRec = makeMockRecorderLib();
+  const mockAai = makeMockAssemblyAiFactory();
+  let failureHandled = false;
+
+  const pipeline = new VoiceInputPipeline({
+    apiKey: "dummy_valid_hex_key_0123456789abcdef0123",
+    onFinalTranscript: async () => {
+      throw new Error("Downstream execution unexpected failure");
+    },
+    components: {
+      recorderLib: mockRec,
+      recorder: "mock",
+      clientFactory: mockAai.factory,
+    },
+  });
+
+  await pipeline.start();
+  assert.equal(pipeline.isRunning, true);
+
+  // Final turn triggers execution which throws
+  const transcriber = mockAai.getLatest();
+  transcriber.emit("turn", {
+    transcript: "Open WhatsApp",
+    end_of_turn: true,
+    turn_order: 1,
+  });
+
+  await new Promise((r) => setTimeout(r, 30));
+
+  // The pipeline should heal and return UI back to IDLE
+  assert.equal(pipeline.getState().uiState, VoiceUiState.IDLE, "pipeline must heal back to IDLE on downstream error");
+  await pipeline.stop();
+});
+

@@ -16,6 +16,7 @@ export const DEFAULT_CONNECTION_PARAMS = {
   speechModel: "universal-3-6-pro",
   mode: "balanced",
   formatTurns: true,
+  connectTimeout: 10000,
 };
 
 /**

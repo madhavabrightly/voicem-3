@@ -166,6 +166,8 @@ export class TranscriptProcessor extends EventEmitter {
    */
   clearForNewActivation() {
     this.currentPartial = "";
+    this.processedTurns.clear();
+    this.processedHashes.clear();
     this.emit("cleared");
   }
 
