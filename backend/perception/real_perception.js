@@ -45,6 +45,24 @@ export class RealPerception extends Perception {
     this._taskFg = null; // foreground info captured when the task app opened
     this.settleMs = config?.agent?.verifySettleMs ?? DEFAULT_SETTLE_MS;
     this.pollMs = config?.agent?.verifyPollMs ?? DEFAULT_POLL_MS;
+    this._lastModel = null;
+  }
+
+  /**
+   * Fail-closed mutation gate: verifies expected application is active before mutation.
+   */
+  canMutate(expectedApp, model = null) {
+    const currentModel = model || this._lastModel;
+    if (!expectedApp) return { allowed: true, reason: "no_expectation" };
+    if (!currentModel) return { allowed: false, reason: "no_screen_model" };
+
+    const actual = String(currentModel.application || "").toLowerCase();
+    const exp = String(expectedApp || "").toLowerCase();
+    const allowed = actual.includes(exp) || exp.includes(actual);
+    return {
+      allowed,
+      reason: allowed ? "compatible" : `identity_mismatch: expected '${expectedApp}', actual '${currentModel.application}'`,
+    };
   }
 
   /** True when the current foreground belongs to a different application. */
@@ -97,10 +115,12 @@ export class RealPerception extends Perception {
         // step verifies interactivity.
         const target = String(step.target || "").toLowerCase();
         const fg = this.foreground ? await this.foreground().catch(() => null) : null;
-        const titleHit = Boolean(target && fg?.title && fg.title.toLowerCase().includes(target));
+        // Deterministic regression fix: DuckDuckGo / search engine window titles are NOT the app
+        const isSearchEngine = Boolean(fg?.title && /duckduckgo|google search|bing/i.test(fg.title));
+        const titleHit = Boolean(!isSearchEngine && target && fg?.title && fg.title.toLowerCase().includes(target));
         const search = model.find({ type: "search_box" });
-        const appHit = Boolean(target && String(model.application || "").toLowerCase().includes(target));
-        const success = titleHit || search.length > 0 || appHit;
+        const appHit = Boolean(!isSearchEngine && target && String(model.application || "").toLowerCase().includes(target));
+        const success = titleHit || (appHit && (search.length > 0 || model.screen !== "unknown"));
         if (success && fg) this._taskFg = fg;
         return success;
       }

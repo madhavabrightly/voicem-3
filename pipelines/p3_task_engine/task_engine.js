@@ -461,6 +461,15 @@ export class TaskEngine extends EventEmitter {
     const { taskId, tracker, events, graph } = task;
     const step = node.step;
 
+    // Fail-closed gating: verify identity compatibility before mutating actions
+    if (MUTATING_STEPS.has(step.type) && this.perception && typeof this.perception.canMutate === "function" && spec?.application) {
+      const gate = this.perception.canMutate(spec.application);
+      if (!gate.allowed) {
+        events.emitFailure("mutation_gate_blocked", { taskId, node: node.id, step: step.type, reason: gate.reason });
+        return { ok: false, reason: "mutation_gate_blocked", detail: gate };
+      }
+    }
+
     // 247. Execute tool.
     if (!this.toolBox || typeof this.toolBox.run !== "function") {
       return { ok: false, reason: "no_toolbox" };
@@ -482,7 +491,14 @@ export class TaskEngine extends EventEmitter {
     // 248. Observe result (fresh screen model for the tracker + audit).
     const model = await this._observe(task, step, perceptionMethod);
     if (model) {
-      tracker.observeContext({ application: model.application, screen: model.screen }); // 239, 240
+      tracker.observeContext({
+        application: model.application,
+        screen: model.screen,
+        environment: model.environment,
+        identity: model.identity,
+        hash: model.hash,
+        capturedAt: model.capturedAt,
+      }); // 239, 240, P4
     }
 
     // 249. Verify result — only for steps that change the screen.
@@ -561,7 +577,7 @@ export class TaskEngine extends EventEmitter {
   _expectationFor(step) {
     switch (step?.type) {
       case "open_app":
-        return { screen: "application_loaded", state: `${step.target} open` };
+        return { screen: "application_loaded", state: `${step.target} open`, environment: { activeApplication: step.target } };
       case "find_element":
       case "click":
         return { element: step.target || "search_box", state: "target resolved" };

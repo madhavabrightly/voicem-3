@@ -8,17 +8,38 @@ export class ScreenModel {
   /**
    * @param {object} init
    * @param {string} [init.application]
+   * @param {string} [init.document]
    * @param {string} [init.screen]
    * @param {Array}  [init.elements]
    * @param {string} [init.source] which sensor produced this (uia | ocr | vision ...)
    * @param {number} [init.confidence]
+   * @param {object} [init.environment]
+   * @param {number} [init.capturedAt]
+   * @param {string} [init.hash]
+   * @param {object} [init.identity]
    */
-  constructor({ application = "unknown", screen = "unknown", elements = [], source = "unknown", confidence = 0 } = {}) {
+  constructor({
+    application = "unknown",
+    document = null,
+    screen = "unknown",
+    elements = [],
+    source = "unknown",
+    confidence = 0,
+    environment = null,
+    capturedAt = null,
+    hash = null,
+    identity = null,
+  } = {}) {
     this.application = application;
+    this.document = document;
     this.screen = screen;
     this.elements = elements;
     this.source = source;
     this.confidence = confidence;
+    this.environment = environment;
+    this.capturedAt = capturedAt ?? Date.now();
+    this.hash = hash;
+    this.identity = identity;
   }
 
   /** Find elements matching a semantic description, e.g. { type:"search" }. */
@@ -32,6 +53,8 @@ export class ScreenModel {
     const ALIASES = {
       search: ["search", "search_box"],
       search_box: ["search", "search_box"],
+      input: ["input", "edit", "text_field", "search_box"],
+      contact: ["contact", "chat", "listitem"],
     };
     const expand = (v) => {
       const key = String(v || "").toLowerCase();
@@ -57,10 +80,15 @@ export class ScreenModel {
   toJSON() {
     return {
       application: this.application,
+      document: this.document,
       screen: this.screen,
       source: this.source,
       confidence: this.confidence,
+      capturedAt: this.capturedAt,
+      hash: this.hash,
+      environment: this.environment,
+      identity: this.identity,
       elements: this.elements,
     };
   }
-}
+}

@@ -47,3 +47,30 @@ test("REAL: 'Open WhatsApp and search for Dad' on the live desktop", { timeout: 
     driver.stop();
   }
 });
+
+test("REAL NEGATIVE: background WhatsApp tab with another tab active refuses mutation before keystroke", { timeout: 60000 }, async (t) => {
+  const { driver, perception } = buildRealAgent();
+
+  try {
+    const fg = await driver.foreground();
+    if (!fg) {
+      t.skip("no interactive desktop available");
+      return;
+    }
+
+    // Inspect live environment
+    const model = await perception.perceive({ intent: "check active tab" });
+    if (!model || model.application === "WhatsApp") {
+      // If WhatsApp is actually foreground, skip negative test
+      t.skip("WhatsApp is active foreground window; negative test requires non-WhatsApp foreground");
+      return;
+    }
+
+    // When WhatsApp is in background and another tab is active, canMutate("WhatsApp") MUST fail-closed
+    const mutationCheck = perception.canMutate("WhatsApp", model);
+    assert.equal(mutationCheck.allowed, false);
+    assert.match(mutationCheck.reason, /(identity_mismatch|insufficient_evidence)/i);
+  } finally {
+    driver.stop();
+  }
+});

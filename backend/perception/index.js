@@ -61,4 +61,21 @@ export class Perception {
     const success = found.length > 0 || (model.source !== "none");
     return { success, data: model.toJSON() };
   }
+
+  /**
+   * Fail-closed mutation gate: verifies expected application is active before mutation.
+   */
+  canMutate(expectedApp, model = null) {
+    const currentModel = model;
+    if (!expectedApp) return { allowed: true, reason: "no_expectation" };
+    if (!currentModel) return { allowed: false, reason: "no_screen_model" };
+
+    const actual = String(currentModel.application || "").toLowerCase();
+    const exp = String(expectedApp || "").toLowerCase();
+    const allowed = actual.includes(exp) || exp.includes(actual);
+    return {
+      allowed,
+      reason: allowed ? "compatible" : `identity_mismatch: expected '${expectedApp}', actual '${currentModel.application}'`,
+    };
+  }
 }

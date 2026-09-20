@@ -230,8 +230,15 @@ export function classifyGenericScreen(lines, foreground, bounds = null) {
  */
 export function ocrLinesToModel(lines, foreground, bounds = null) {
   const joined = lines.map((l) => l.text.toLowerCase()).join(" ");
+  // Deterministic fix: Search engine pages containing 'whatsapp' query/results are NOT the WhatsApp app.
+  if (foreground && /duckduckgo|google search|bing/i.test(foreground.title || "")) {
+    return classifyGenericScreen(lines, foreground, bounds);
+  }
   if (foreground && /whatsapp/i.test(foreground.title || "")) {
     return classifyWhatsAppScreen(lines, bounds, foreground);
+  }
+  if (foreground && /opera|chrome|msedge|firefox|brave|arc|vivaldi/i.test(foreground.proc || "")) {
+    return classifyGenericScreen(lines, foreground, bounds);
   }
   if (/whatsapp|web\.whatsapp/i.test(joined)) {
     return classifyWhatsAppScreen(lines, bounds, foreground);

@@ -424,6 +424,29 @@ Live demo: `node demo/task-engine-demo.js "Open WhatsApp and search for Dad"`.
 ---
 
 ## P4: Screen Perception Pipeline (Tickets 301–400)
+**Status: Implemented in `pipelines/p4_perception/` — verified against deterministic regression fixtures and the full test suite.**
+
+Core Invariants:
+- **OBSERVATION ≠ IDENTITY ≠ INTERPRETATION**: OCR containing an app name is evidence the text exists, not proof the app is the active document.
+- **Evidence Levels**: `PROVEN`, `SUPPORTED`, `INFERRED`, `UNKNOWN`.
+- **Browser Selected-Tab Resolution**: UIA TabItem + IsSelected first, correlated with window title.
+- **Fail-Closed Mutation Gate**: Prevents mutating steps from executing when target identity is incompatible.
+- **Ownership Stamping & Staleness**: Elements stamped with hwnd/pid/hash/timestamp.
+
+Implementation map:
+- `capture.js` — **301, 302, 367, 368**: Screen capture, resolution detection, metadata, deterministic capture hash.
+- `environment_probe.js` — **303–306, 357**: Active window, process, title, class, bounds, canonical application name.
+- `browser_target.js` — **336, 383**: Browser detection, selected tab resolution, document title parsing.
+- `identity.js` — **305, 391, 392**: Proven identity resolution, evidence levels, fail-closed compatibility check.
+- `sensors.js` — **307–355**: Multi-sensor scan (OCR, UIA, Vision), coordinate normalization, deduplication, overlap & label conflict resolution, confidence scoring.
+- `model_build.js` — **348–356, 360–366**: ScreenModel building, element ownership stamping.
+- `screen_state.js` — **368–384**: Screen change detection, deterministic hash comparison, screen state classification.
+- `staleness.js` — **357, 369**: Validity window, staleness detection, environment drift tracking.
+- `observer.js` — **385–398**: Semantic target resolution, exact/fuzzy/role matching, low-confidence rejection, multi-sensor retry & fallback.
+- `index.js` — Unified P4Perception gateway, preserving the Perception interface.
+
+Tests: `tests/p4_perception_pipeline.test.js` — tickets **385–400** numbered, plus regression fixtures and 301–384 coverage tests.
+
 301. Capture current screen.
 302. Detect screen resolution.
 303. Detect active window.
