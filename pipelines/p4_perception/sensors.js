@@ -175,6 +175,22 @@ export class MultiSensorManager {
       } catch {
         // UIA unavailable or timed out, fallback to OCR
       }
+    } else if (this.driver && typeof this.driver.findUiaElements === "function") {
+      try {
+        const els = await this.driver.findUiaElements();
+        if (els && els.length > 0) {
+          primarySource = "uia";
+          for (const el of els) {
+            rawElements.push({
+              ...el,
+              source: "uia",
+              confidence: calculateElementConfidence({ ...el, source: "uia" }),
+            });
+          }
+        }
+      } catch {
+        // Driver findUiaElements failed
+      }
     }
 
     // 2. OCR Scan (307–318, 395) with bounded retry

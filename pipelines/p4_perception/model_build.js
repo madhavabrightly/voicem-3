@@ -15,7 +15,8 @@
  *  366. Store source sensor.
  */
 
-import { computeCaptureHash } from "./capture.js";
+import { computeCaptureHash, computeSemanticStateHash } from "./capture.js";
+import { SENSOR_VALIDITY_WINDOWS } from "./staleness.js";
 
 /**
  * Stamps an element with environment ownership so it cannot be reused after
@@ -54,6 +55,14 @@ export class ScreenModel {
    * @param {number} [init.capturedAt]
    * @param {string} [init.hash]
    * @param {object} [init.identity]
+   * @param {object} [init.selectedTab]
+   * @param {object} [init.focusedElement]
+   * @param {string} [init.searchState]
+   * @param {boolean} [init.modalState]
+   * @param {boolean} [init.loadingState]
+   * @param {boolean} [init.errorState]
+   * @param {() => number} [init.clock]
+   * @param {number} [init.validityWindowMs]
    */
   constructor({
     application = "unknown",
@@ -64,8 +73,16 @@ export class ScreenModel {
     confidence = 0,
     environment = null,
     capturedAt = null,
-    hash = null,
+    hash = undefined,
     identity = null,
+    selectedTab = null,
+    focusedElement = null,
+    searchState = null,
+    modalState = false,
+    loadingState = false,
+    errorState = false,
+    clock = () => Date.now(),
+    validityWindowMs = null,
   } = {}) {
     this.application = application;
     this.document = document;
@@ -73,25 +90,134 @@ export class ScreenModel {
     this.source = source;
     this.confidence = confidence;
     this.environment = environment;
-    this.capturedAt = capturedAt ?? Date.now();
+    this._clock = clock;
+    this.capturedAt = capturedAt ?? (typeof clock === "function" ? clock() : Date.now());
     this.identity = identity;
+    this._validityWindowMs = validityWindowMs;
+
+    this.selectedTab = selectedTab || identity?.selectedTab || null;
+    this.focusedElement = focusedElement;
+    this.searchState = searchState;
+    this.modalState = modalState;
+    this.loadingState = loadingState;
+    this.errorState = errorState;
+    this.evidenceLevel = identity?.level || (application !== "unknown" ? "SUPPORTED" : "UNKNOWN");
 
     // Stamp ownership on elements if not already stamped
     this.elements = (elements || []).map((e) =>
       e.ownership ? e : stampElementOwnership(e, environment || {}, this.capturedAt)
     );
 
-    // Compute screen hash if not provided
+    this.sensorProvenance = {
+      source: this.source,
+      confidence: this.confidence,
+      environment: this.environment,
+      capturedAt: this.capturedAt,
+      evidenceLevel: this.evidenceLevel,
+    };
+
+    // Compute deterministic semantic state hash if not explicitly provided
     this.hash =
-      hash ||
-      computeCaptureHash({
-        application,
-        document,
-        screen,
-        elementCount: this.elements.length,
-        elements: this.elements.map((e) => `${e.type}:${e.name}:${e.bbox?.x},${e.bbox?.y}`),
-        capturedAt: Math.floor(this.capturedAt / 1000),
-      });
+      hash !== undefined
+        ? hash
+        : computeSemanticStateHash({
+            application,
+            document,
+            screen,
+            selectedTab: this.selectedTab,
+            focusedElement: this.focusedElement,
+            searchState: this.searchState,
+            modalState: this.modalState,
+            loadingState: this.loadingState,
+            errorState: this.errorState,
+            elements: this.elements,
+          });
+
+    this.stateHash = this.hash;
+  }
+
+  /**
+   * Age in milliseconds since capture.
+   */
+  get ageMs() {
+    const now = typeof this._clock === "function" ? this._clock() : Date.now();
+    return Math.max(0, now - this.capturedAt);
+  }
+
+  /**
+   * Staleness status: FRESH | STALE | EXPIRED
+   */
+  get stalenessStatus() {
+    const srcKey = String(this.source || "").toLowerCase();
+    const limit = this._validityWindowMs || SENSOR_VALIDITY_WINDOWS[srcKey] || SENSOR_VALIDITY_WINDOWS.default;
+    const age = this.ageMs;
+    if (age > limit * 2) return "EXPIRED";
+    if (age > limit) return "STALE";
+    return "FRESH";
+  }
+
+  /**
+   * True if capture age exceeds its sensor validity window.
+   */
+  get isStale() {
+    return this.stalenessStatus !== "FRESH";
+  }
+
+  /**
+   * Element ownership summaries for rapid validation.
+   */
+  get elementOwnership() {
+    return {
+      hwnd: this.environment?.hwnd ?? "0x0",
+      pid: this.environment?.pid ?? 0,
+      capturedAt: this.capturedAt,
+      environmentHash: this.environment?.hash ?? null,
+      totalElements: this.elements.length,
+    };
+  }
+
+  get ownership() {
+    return this.elementOwnership;
+  }
+
+  get staleness() {
+    return this.stalenessStatus;
+  }
+
+  get hwnd() {
+    return this.environment?.hwnd ?? "0x0";
+  }
+
+  get pid() {
+    return this.environment?.pid ?? 0;
+  }
+
+  get proc() {
+    return this.environment?.proc ?? "unknown";
+  }
+
+  get title() {
+    return this.environment?.title ?? "";
+  }
+
+  get class() {
+    return this.environment?.class ?? "";
+  }
+
+  get browser() {
+    return Boolean(this.environment?.isBrowser || this.identity?.isBrowser);
+  }
+
+  get tab() {
+    return this.selectedTab?.name || this.identity?.selectedTab?.name || null;
+  }
+
+  get evidence() {
+    return this.identity?.evidence || [];
+  }
+
+  get provenance() {
+    return this.identity?.provenance || this.sensorProvenance;
   }
 
   /**
@@ -141,7 +267,13 @@ export class ScreenModel {
       source: this.source,
       confidence: this.confidence,
       capturedAt: this.capturedAt,
+      ageMs: this.ageMs,
       hash: this.hash,
+      stateHash: this.stateHash,
+      stalenessStatus: this.stalenessStatus,
+      isStale: this.isStale,
+      evidenceLevel: this.evidenceLevel,
+      sensorProvenance: this.sensorProvenance,
       environment: this.environment,
       identity: this.identity,
       elements: this.elements,
@@ -159,9 +291,18 @@ export function buildScreenModel({
   source = "unknown",
   confidence = 0,
   screen = "unknown",
-  capturedAt = Date.now(),
+  capturedAt = null,
+  selectedTab = null,
+  focusedElement = null,
+  searchState = null,
+  modalState = false,
+  loadingState = false,
+  errorState = false,
+  clock = () => Date.now(),
+  validityWindowMs = null,
 } = {}) {
-  const stampedElements = elements.map((e) => stampElementOwnership(e, environment, capturedAt));
+  const ts = capturedAt ?? (typeof clock === "function" ? clock() : Date.now());
+  const stampedElements = elements.map((e) => stampElementOwnership(e, environment, ts));
 
   return new ScreenModel({
     application: identity?.application || environment?.activeApplication || "unknown",
@@ -171,7 +312,15 @@ export function buildScreenModel({
     source,
     confidence,
     environment,
-    capturedAt,
+    capturedAt: ts,
     identity,
+    selectedTab: selectedTab || identity?.selectedTab,
+    focusedElement,
+    searchState,
+    modalState,
+    loadingState,
+    errorState,
+    clock,
+    validityWindowMs,
   });
 }

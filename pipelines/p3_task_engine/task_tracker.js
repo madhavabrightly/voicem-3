@@ -37,16 +37,24 @@ export class TaskTracker {
     this.finishedAt = null;
 
     this.currentApplication = null; // 239
+    this.currentDocument = null; // P4
     this.currentScreen = null; // 240
     this.currentEnvironment = null; // P4
     this.currentIdentity = null; // P4
     this.screenHash = null; // P4
     this.capturedAt = null; // P4
+    this.ownership = null; // P4
+    this.staleness = null; // P4
 
     this.expectedScreen = null; // 241
     this.expectedElement = null; // 242
     this.expectedState = null; // 243
     this.expectedEnvironment = null; // P4
+    this.expectedApplication = null; // P4
+    this.expectedWindow = null; // P4
+    this.expectedDocument = null; // P4
+    this.expectedBrowser = null; // P4
+    this.expectedTab = null; // P4
   }
 
   /** 237. Task timestamps. */
@@ -116,39 +124,74 @@ export class TaskTracker {
   /** 239–240. Track the live application/screen context. */
   observeContext({
     application = null,
+    document = null,
     screen = null,
     environment = null,
     identity = null,
     hash = null,
     capturedAt = null,
+    ownership = null,
+    staleness = null,
   } = {}) {
     if (application) this.currentApplication = application;
+    if (document) this.currentDocument = document;
     if (screen) this.currentScreen = screen;
     if (environment) this.currentEnvironment = environment;
     if (identity) this.currentIdentity = identity;
     if (hash) this.screenHash = hash;
     if (capturedAt) this.capturedAt = capturedAt;
+    if (ownership) this.ownership = ownership;
+    if (staleness) this.staleness = staleness;
     return {
       application: this.currentApplication,
+      document: this.currentDocument,
       screen: this.currentScreen,
       environment: this.currentEnvironment,
       identity: this.currentIdentity,
       hash: this.screenHash,
       capturedAt: this.capturedAt,
+      ownership: this.ownership,
+      staleness: this.staleness,
     };
   }
 
   /** 241–243. Track what the task EXPECTS to see. */
-  expect({ screen = null, element = null, state = null, environment = null } = {}) {
+  expect({
+    screen = null,
+    element = null,
+    state = null,
+    environment = null,
+    expectedApplication = null,
+    application = null,
+    expectedWindow = null,
+    window = null,
+    expectedDocument = null,
+    document = null,
+    expectedBrowser = null,
+    browser = null,
+    expectedTab = null,
+    tab = null,
+  } = {}) {
     if (screen) this.expectedScreen = screen;
     if (element) this.expectedElement = element;
     if (state) this.expectedState = state;
     if (environment) this.expectedEnvironment = environment;
+    if (expectedApplication || application) this.expectedApplication = expectedApplication || application;
+    if (expectedWindow || window) this.expectedWindow = expectedWindow || window;
+    if (expectedDocument || document) this.expectedDocument = expectedDocument || document;
+    if (expectedBrowser !== null || browser !== null) this.expectedBrowser = expectedBrowser ?? browser;
+    if (expectedTab || tab) this.expectedTab = expectedTab || tab;
+
     return {
       screen: this.expectedScreen,
       element: this.expectedElement,
       state: this.expectedState,
       environment: this.expectedEnvironment,
+      expectedApplication: this.expectedApplication,
+      expectedWindow: this.expectedWindow,
+      expectedDocument: this.expectedDocument,
+      expectedBrowser: this.expectedBrowser,
+      expectedTab: this.expectedTab,
     };
   }
 
@@ -166,15 +209,23 @@ export class TaskTracker {
       finishedAt: this.finishedAt,
       durationMs: this.durationMs,
       currentApplication: this.currentApplication,
+      currentDocument: this.currentDocument,
       currentScreen: this.currentScreen,
       currentEnvironment: this.currentEnvironment,
       currentIdentity: this.currentIdentity,
       screenHash: this.screenHash,
       capturedAt: this.capturedAt,
+      ownership: this.ownership,
+      staleness: this.staleness,
       expectedScreen: this.expectedScreen,
       expectedElement: this.expectedElement,
       expectedState: this.expectedState,
       expectedEnvironment: this.expectedEnvironment,
+      expectedApplication: this.expectedApplication,
+      expectedWindow: this.expectedWindow,
+      expectedDocument: this.expectedDocument,
+      expectedBrowser: this.expectedBrowser,
+      expectedTab: this.expectedTab,
     };
   }
 
@@ -191,15 +242,23 @@ export class TaskTracker {
     tracker.startedAt = snapshot.startedAt ?? null;
     tracker.finishedAt = snapshot.finishedAt ?? null;
     tracker.currentApplication = snapshot.currentApplication ?? null;
+    tracker.currentDocument = snapshot.currentDocument ?? null;
     tracker.currentScreen = snapshot.currentScreen ?? null;
     tracker.currentEnvironment = snapshot.currentEnvironment ?? null;
     tracker.currentIdentity = snapshot.currentIdentity ?? null;
     tracker.screenHash = snapshot.screenHash ?? null;
     tracker.capturedAt = snapshot.capturedAt ?? null;
+    tracker.ownership = snapshot.ownership ?? null;
+    tracker.staleness = snapshot.staleness ?? null;
     tracker.expectedScreen = snapshot.expectedScreen ?? null;
     tracker.expectedElement = snapshot.expectedElement ?? null;
     tracker.expectedState = snapshot.expectedState ?? null;
     tracker.expectedEnvironment = snapshot.expectedEnvironment ?? null;
+    tracker.expectedApplication = snapshot.expectedApplication ?? null;
+    tracker.expectedWindow = snapshot.expectedWindow ?? null;
+    tracker.expectedDocument = snapshot.expectedDocument ?? null;
+    tracker.expectedBrowser = snapshot.expectedBrowser ?? null;
+    tracker.expectedTab = snapshot.expectedTab ?? null;
     return tracker;
   }
 }

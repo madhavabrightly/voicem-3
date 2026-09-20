@@ -20,36 +20,73 @@
  *  384. Detect desktop state.
  */
 
+import { isIdentityCompatible } from "./identity.js";
+
 export const CHANGE_STATUS = {
   UNCHANGED: "UNCHANGED",
   CHANGED: "CHANGED",
   UNKNOWN: "UNKNOWN",
+  STALE: "STALE",
+  MISMATCH: "MISMATCH",
 };
 
 /**
- * 369–374. Compare previous and current screen models.
- * Rule: NEVER treat an unavailable hash or missing model as UNCHANGED.
+ * 369–374. Compare previous and current screen models according to deterministic state rules.
+ *
+ * Rules:
+ *   NO HASH → UNKNOWN
+ *   different identity → CHANGED
+ *   same hash + compatible identity → UNCHANGED
+ *   different hash + compatible identity → CHANGED
+ *   stale capture → STALE
+ *   identity mismatch → MISMATCH
  */
-export function compareScreens(prevModel, currModel) {
-  if (!prevModel || !currModel) {
+export function compareScreens(prevModel, currModel, { expectedTarget = null, checkStale = false } = {}) {
+  // 1. NO HASH or missing model -> UNKNOWN
+  if (!prevModel || !currModel || !prevModel.hash || !currModel.hash) {
     return {
       status: CHANGE_STATUS.UNKNOWN,
-      reason: "missing_model",
-      changes: { appChanged: true, windowChanged: true, elementsChanged: true, textChanged: true },
+      code: "UNKNOWN",
+      reason: "missing_hash_or_model",
+      changes: { appChanged: true, windowChanged: true, elementsChanged: true, textChanged: true, hashChanged: true },
     };
   }
 
-  if (!prevModel.hash || !currModel.hash) {
+  // 2. Identity mismatch if expectedTarget requested
+  if (expectedTarget && currModel.identity) {
+    const compat = isIdentityCompatible(currModel.identity, expectedTarget);
+    if (!compat.compatible) {
+      return {
+        status: CHANGE_STATUS.MISMATCH,
+        code: "MISMATCH",
+        reason: compat.reason || "identity_mismatch",
+        failedField: compat.failedField,
+        changes: { appChanged: true, windowChanged: false, elementsChanged: true, textChanged: true, hashChanged: true },
+      };
+    }
+  }
+
+  // 3. Stale capture check (if requested or model flagged stale)
+  if (checkStale && (currModel.isStale || prevModel.isStale)) {
     return {
-      status: CHANGE_STATUS.UNKNOWN,
-      reason: "missing_hash",
-      changes: { appChanged: true, windowChanged: true, elementsChanged: true, textChanged: true },
+      status: CHANGE_STATUS.STALE,
+      code: "STALE",
+      reason: "stale_screen_model",
+      changes: { appChanged: false, windowChanged: false, elementsChanged: false, textChanged: false, hashChanged: false },
     };
   }
 
+  // 4. Different identity -> CHANGED
   const appChanged = prevModel.application !== currModel.application; // 371
-  const docChanged = prevModel.document !== currModel.document;
-  const windowChanged = prevModel.environment?.hwnd !== currModel.environment?.hwnd; // 372
+  const docChanged = Boolean(prevModel.document && currModel.document && prevModel.document !== currModel.document);
+  const tabChanged = Boolean(prevModel.selectedTab?.name && currModel.selectedTab?.name && prevModel.selectedTab.name !== currModel.selectedTab.name);
+  const windowChanged = Boolean(
+    prevModel.environment?.hwnd &&
+    currModel.environment?.hwnd &&
+    prevModel.environment.hwnd !== "0x0" &&
+    currModel.environment.hwnd !== "0x0" &&
+    prevModel.environment.hwnd !== currModel.environment.hwnd
+  );
 
   const prevText = (prevModel.elements || []).map((e) => e.name || "").join(" ");
   const currText = (currModel.elements || []).map((e) => e.name || "").join(" ");
@@ -62,14 +99,52 @@ export function compareScreens(prevModel, currModel) {
 
   const hashChanged = prevModel.hash !== currModel.hash; // 370
 
-  const hasAnyChange = appChanged || docChanged || windowChanged || textChanged || elementsChanged || hashChanged;
+  const identityChanged = appChanged || docChanged || tabChanged || windowChanged;
 
+  if (identityChanged) {
+    return {
+      status: CHANGE_STATUS.CHANGED,
+      code: "CHANGED",
+      reason: "identity_or_window_drift",
+      changes: {
+        appChanged,
+        docChanged,
+        tabChanged,
+        windowChanged,
+        textChanged,
+        elementsChanged,
+        hashChanged,
+      },
+    };
+  }
+
+  // 5. Same hash + compatible identity -> UNCHANGED
+  if (!hashChanged) {
+    return {
+      status: CHANGE_STATUS.UNCHANGED,
+      code: "UNCHANGED",
+      reason: "identical_semantic_state",
+      changes: {
+        appChanged: false,
+        docChanged: false,
+        tabChanged: false,
+        windowChanged: false,
+        textChanged: false,
+        elementsChanged: false,
+        hashChanged: false,
+      },
+    };
+  }
+
+  // 6. Different hash + compatible identity -> CHANGED
   return {
-    status: hasAnyChange ? CHANGE_STATUS.CHANGED : CHANGE_STATUS.UNCHANGED,
-    reason: hasAnyChange ? "screen_modified" : "identical_hash_and_elements",
+    status: CHANGE_STATUS.CHANGED,
+    code: "CHANGED",
+    reason: "semantic_state_modified",
     changes: {
       appChanged,
       docChanged,
+      tabChanged,
       windowChanged,
       textChanged,
       elementsChanged,

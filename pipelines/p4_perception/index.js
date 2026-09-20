@@ -12,20 +12,28 @@
  *   - Fail-closed mutation gating before any destructive or input action
  */
 
-import { ScreenCaptureEngine, computeCaptureHash } from "./capture.js";
+import { ScreenCaptureEngine, computeCaptureHash, computeSemanticStateHash } from "./capture.js";
 import { EnvironmentProbe, sanitizeApplicationName } from "./environment_probe.js";
 import { BrowserTargetResolver, isBrowserProcess, parseBrowserWindowTitle } from "./browser_target.js";
-import { resolveProvenIdentity, isIdentityCompatible, EVIDENCE_LEVELS, normalizeIdentityName } from "./identity.js";
+import {
+  resolveProvenIdentity,
+  isIdentityCompatible,
+  isNonAppWebDocument,
+  EVIDENCE_LEVELS,
+  IDENTITY_REASON_CODES,
+  normalizeIdentityName,
+} from "./identity.js";
 import { MultiSensorManager, normalizeCoordinates, classifyRoleType } from "./sensors.js";
 import { ScreenModel, buildScreenModel, stampElementOwnership } from "./model_build.js";
 import { ScreenStateClassifier, compareScreens, CHANGE_STATUS } from "./screen_state.js";
-import { StalenessManager, DEFAULT_VALIDITY_WINDOW_MS } from "./staleness.js";
+import { StalenessManager, DEFAULT_VALIDITY_WINDOW_MS, SENSOR_VALIDITY_WINDOWS } from "./staleness.js";
 import { ObserverEngine, rankMatchingElements } from "./observer.js";
 import { classifyWhatsAppScreen, classifyGenericScreen, ocrLinesToModel } from "../../backend/perception/real_ocr.js";
 
 export {
   ScreenCaptureEngine,
   computeCaptureHash,
+  computeSemanticStateHash,
   EnvironmentProbe,
   sanitizeApplicationName,
   BrowserTargetResolver,
@@ -33,7 +41,9 @@ export {
   parseBrowserWindowTitle,
   resolveProvenIdentity,
   isIdentityCompatible,
+  isNonAppWebDocument,
   EVIDENCE_LEVELS,
+  IDENTITY_REASON_CODES,
   normalizeIdentityName,
   MultiSensorManager,
   normalizeCoordinates,
@@ -46,6 +56,7 @@ export {
   CHANGE_STATUS,
   StalenessManager,
   DEFAULT_VALIDITY_WINDOW_MS,
+  SENSOR_VALIDITY_WINDOWS,
   ObserverEngine,
   rankMatchingElements,
 };
@@ -170,6 +181,8 @@ export class P4Perception {
       environment: env,
       capturedAt: timestamp,
       identity,
+      selectedTab: identity.selectedTab || browserTarget?.activeTab || null,
+      clock: this.clock,
     });
 
     this._lastModel = model;
@@ -179,22 +192,153 @@ export class P4Perception {
   /**
    * Fail-closed mutation gate: checks if an action targeting expectedApp can safely execute.
    *
-   * @param {string} expectedApp
+   * Before every identity-sensitive mutation:
+   * 1. Obtain current perception
+   * 2. Compare expected identity
+   * 3. Verify target ownership
+   * 4. Verify freshness
+   * 5. Verify focus
+   * 6. Only then allow mutation
+   *
+   * @param {string|object} expectedAppOrSpec
    * @param {ScreenModel} [model]
-   * @returns {{ allowed: boolean, reason: string, identity: object }}
+   * @returns {{ allowed: boolean, code: string, reason: string, failedField?: string, identity: object, recoveryHandoff?: object }}
    */
-  canMutate(expectedApp, model = null) {
+  canMutate(expectedAppOrSpec, model = null) {
     const currentModel = model || this._lastModel;
-    if (!expectedApp) return { allowed: true, reason: "no_expectation", identity: currentModel?.identity ?? null };
-    if (!currentModel || !currentModel.identity) {
-      return { allowed: false, reason: "no_screen_model_identity", identity: null };
+    const expSpec =
+      typeof expectedAppOrSpec === "string"
+        ? { application: expectedAppOrSpec }
+        : { ...(expectedAppOrSpec || {}) };
+
+    if (!expectedAppOrSpec) {
+      return {
+        allowed: true,
+        code: IDENTITY_REASON_CODES.IDENTITY_PROVEN,
+        reason: "no_expectation",
+        identity: currentModel?.identity ?? null,
+      };
     }
 
-    const check = isIdentityCompatible(currentModel.identity, expectedApp);
+    // 1. Obtain current perception
+    if (!currentModel || !currentModel.identity) {
+      return {
+        allowed: false,
+        code: IDENTITY_REASON_CODES.IDENTITY_UNKNOWN,
+        reason: "no_screen_model_identity",
+        failedField: "identity",
+        identity: null,
+        recoveryHandoff: {
+          expectedIdentity: expSpec,
+          actualIdentity: null,
+          mismatchReason: "no_screen_model_identity",
+          candidateTargets: [],
+          requiredEvidence: "screen_perception",
+          reperceiveRequest: { intent: "recover missing perception", suggestedMethod: "uia" },
+        },
+      };
+    }
+
+    // 2. Compare expected identity
+    const check = isIdentityCompatible(currentModel.identity, expSpec);
+    if (!check.compatible) {
+      return {
+        allowed: false,
+        code: check.code,
+        reason: check.reason,
+        failedField: check.failedField || "identity",
+        identity: currentModel.identity,
+        recoveryHandoff: {
+          expectedIdentity: expSpec,
+          actualIdentity: currentModel.identity,
+          mismatchReason: check.reason,
+          candidateTargets: (currentModel.elements || []).slice(0, 5),
+          requiredEvidence: check.failedField || "application_identity",
+          reperceiveRequest: {
+            intent: `recover identity mismatch for ${expSpec.application || expSpec.expectedApplication || "target"}`,
+            suggestedMethod: "uia",
+          },
+        },
+      };
+    }
+
+    // 3. Verify target ownership
+    if (expSpec.targetElement && expSpec.targetElement.ownership) {
+      const elHwnd = expSpec.targetElement.ownership.hwnd;
+      if (elHwnd && currentModel.hwnd && elHwnd !== "0x0" && currentModel.hwnd !== "0x0" && elHwnd !== currentModel.hwnd) {
+        return {
+          allowed: false,
+          code: IDENTITY_REASON_CODES.IDENTITY_MISMATCH,
+          reason: `target_ownership_drift: element bound to hwnd ${elHwnd} but active window is ${currentModel.hwnd}`,
+          failedField: "ownership",
+          identity: currentModel.identity,
+          recoveryHandoff: {
+            expectedIdentity: expSpec,
+            actualIdentity: currentModel.identity,
+            mismatchReason: `ownership_drift_hwnd_${elHwnd}`,
+            candidateTargets: currentModel.find({ type: expSpec.targetElement.type, name: expSpec.targetElement.name }),
+            requiredEvidence: "element_ownership",
+            reperceiveRequest: { intent: "re-locate target element", suggestedMethod: "uia" },
+          },
+        };
+      }
+    }
+
+    // 4. Verify freshness
+    if (this.stalenessManager.isStale(currentModel)) {
+      return {
+        allowed: false,
+        code: IDENTITY_REASON_CODES.IDENTITY_STALE,
+        reason: `identity_stale: screen model age ${this.stalenessManager.getAge(currentModel)}ms exceeds validity window`,
+        failedField: "stalenessStatus",
+        identity: currentModel.identity,
+        recoveryHandoff: {
+          expectedIdentity: expSpec,
+          actualIdentity: currentModel.identity,
+          mismatchReason: "screen_model_stale",
+          candidateTargets: (currentModel.elements || []).slice(0, 5),
+          requiredEvidence: "fresh_perception",
+          reperceiveRequest: { intent: "refresh stale model", suggestedMethod: currentModel.source || "uia" },
+        },
+      };
+    }
+
+    // 5. Verify focus
+    if (
+      this._taskFg &&
+      currentModel.hwnd &&
+      this._taskFg.hwnd !== "0x0" &&
+      currentModel.hwnd !== "0x0" &&
+      this._taskFg.hwnd !== currentModel.hwnd
+    ) {
+      return {
+        allowed: false,
+        code: IDENTITY_REASON_CODES.IDENTITY_MISMATCH,
+        reason: `foreground_focus_lost: expected focus on ${this._taskFg.hwnd}, actual active window is ${currentModel.hwnd}`,
+        failedField: "focus",
+        identity: currentModel.identity,
+        recoveryHandoff: {
+          expectedIdentity: expSpec,
+          actualIdentity: currentModel.identity,
+          mismatchReason: "foreground_focus_lost",
+          candidateTargets: [],
+          requiredEvidence: "window_focus",
+          reperceiveRequest: { intent: "restore window focus", suggestedMethod: "foreground" },
+        },
+      };
+    }
+
+    // 6. Only then allow mutation
     return {
-      allowed: check.compatible,
-      reason: check.reason,
+      allowed: true,
+      code:
+        currentModel.identity.level === EVIDENCE_LEVELS.PROVEN
+          ? IDENTITY_REASON_CODES.IDENTITY_PROVEN
+          : IDENTITY_REASON_CODES.IDENTITY_SUPPORTED,
+      reason: "identity_freshness_and_focus_verified",
+      failedField: null,
       identity: currentModel.identity,
+      model: currentModel,
     };
   }
 
@@ -250,10 +394,8 @@ export class P4Perception {
     switch (step.type) {
       case "open_app": {
         const target = String(step.target || "").trim();
-        const targetNorm = normalizeIdentityName(target);
 
-        // Core fix: A generic search box alone is NOT proof of the application!
-        // The identity MUST be PROVEN or SUPPORTED for the requested target.
+        // 1. Strict identity compatibility verification
         const idCheck = isIdentityCompatible(model.identity, target);
         if (!idCheck.compatible) {
           return {
@@ -262,8 +404,15 @@ export class P4Perception {
           };
         }
 
-        // Target application is confirmed active
-        if (model.environment) this._taskFg = model.environment;
+        // 2. Only store task foreground snapshot AFTER proven/supported verification passes
+        if (model.environment && model.environment.hwnd && model.environment.hwnd !== "0x0") {
+          this._taskFg = {
+            ...model.environment,
+            application: model.application,
+            document: model.document,
+            identity: model.identity,
+          };
+        }
         return { success: true };
       }
 

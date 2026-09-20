@@ -83,33 +83,36 @@ JavaScript (V8 engine) is used for the orchestrator, state machines, API server,
 - **Python Usage**: 0%.
 
 ### P4: Screen Perception Pipeline (Tickets 301–400)
-- **Primary Technology**: JavaScript + Native C++ ONNX Engine (`onnxruntime-node`).
-- **Components**:
-  - `paddle_ocr/`: DBNet text detection model + SVTR text recognition model loaded via `onnxruntime-node` (native C++ shared library with CPU SIMD / DirectML acceleration).
+- **Primary Technology**: JavaScript + Native C++ ONNX Engine (`onnxruntime-node`) + Windows WinRT OCR + Windows UIA.
+- **Components** (`pipelines/p4_perception/`):
+  - `paddle_ocr/`: DBNet text detection model + SVTR text recognition model loaded via `onnxruntime-node` (native C++ shared library with CPU SIMD acceleration).
   - `real_ocr.js`: Windows.Media.Ocr native engine via WinRT.
-  - `uia_driver.js` & `uia_scan.ps1`: Windows UI Automation accessibility tree scanner.
+  - `uia_driver.js` & `uia_scan.ps1`: Windows UI Automation accessibility tree scanner (Chrome/Opera/Edge tab and control discovery; CDP is not utilized or required).
+  - `capture.js`: Deterministic semantic state hashing.
+  - `identity.js`: Adversarial identity resolution, evidence hierarchy (`PROVEN`, `SUPPORTED`, `INFERRED`, `UNKNOWN`), and compatibility gating.
+  - `staleness.js` & `screen_state.js`: Sensor validity windows and deterministic change detection.
 - **Latency Benchmark**:
   - Python PaddleOCR: ~2,500ms – 3,500ms (Fail).
-  - Native C++ ONNX Engine via Node.js: **~40ms – 65ms** (Pass - instant perception).
+  - Native C++ ONNX Engine / WinRT OCR via Node.js: **~40ms – 65ms** (Pass - instant perception).
 - **Python Usage**: 0%.
 
-### P5: Computer Action Pipeline (Tickets 401–500)
-- **Primary Technology**: C++ / Win32 Native (`user32.dll` via persistent driver).
+### P5: Computer Action Pipeline (Tickets 401–500) [Planned Scope]
+- **Primary Technology**: C++ / Win32 Native (`user32.dll` via persistent child process).
 - **Components**:
-  - `win-agent.ps1` / `win_driver.js`: Persistent process maintaining open Win32 pipe.
+  - `win-agent.ps1` / `win_driver.js`: Persistent process maintaining stdio JSON-lines communication channel.
   - Input injection: `SetCursorPos`, `mouse_event`, `SendKeys`, `SetForegroundWindow`.
 - **Reaction Time**: **0ms to 1ms** hardware input dispatch.
 - **Python Usage**: 0%.
 
-### P6: Verification + Recovery (Tickets 501–600)
-- **Primary Technology**: JavaScript (diffing & strategy logic) + C++ Win32 (capture).
-- **Components**: Pre/post screen comparison, element state verification, false-success prevention, strategy rollback.
+### P6: Verification + Recovery (Tickets 501–600) [Planned Scope]
+- **Primary Technology**: JavaScript (recovery state machine) consuming P4 structured recovery handoffs.
+- **Components**: Re-perception requests, focus restoration, strategy rollback, target re-resolution.
 - **Reaction Time**: < 15ms screen grab + < 2ms JS state diff.
 - **Python Usage**: 0%.
 
-### P7: Risk / Safety / Confirmation (Tickets 601–700)
-- **Primary Technology**: JavaScript policy engine + Native Win32 modal dialogs.
-- **Components**: Risk tiering (Low, Medium, High), prompt injection defense, untrusted screen text isolation, topmost modal gates (`MessageBoxW` with `MB_TOPMOST | MB_SETFOREGROUND`).
+### P7: Risk / Safety / Confirmation (Tickets 601–700) [Planned Scope]
+- **Primary Technology**: JavaScript policy engine (`requiresConfirmation`) + modal user prompts.
+- **Components**: Risk tiering (Low, Medium, High), prompt injection defense, untrusted screen text isolation, interactive confirmation gates.
 - **Reaction Time**: < 0.1ms rule checking.
 - **Python Usage**: 0%.
 
