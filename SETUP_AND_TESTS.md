@@ -293,3 +293,330 @@ Milestone: verify real AssemblyAI STT with active API key, verify PaddleOCR ONNX
 **Result:** **PASS**
 * Full suite: `npm test` → 59 passed, 1 skipped (live desktop OCR in headless session), 0 failed.
 
+## 7. Live-Desktop Reliability (Verification Settling, Foreground Recovery)
+
+The live-desktop end-to-end test (`tests/real_desktop.test.js`, "Open WhatsApp and
+search for Dad") was failing on the real desktop: the **type** step ran, but its
+verification failed twice and the task was killed with `verification_exhausted` —
+a task that had actually worked was reported as a failure.
+
+### What Was Done
+
+**The failure had two causes, both proven on the live desktop:**
+
+1. **Verification read the screen before the app repainted.** `type` only hands
+   keystrokes to the application (SendKeys returned in **13–29 ms**); Opera +
+   WhatsApp Web still had to process them and repaint. The single verification
+   snapshot was taken **254 ms** later and still showed the placeholder
+   (`bbox {165,185,197x17}` — the placeholder's exact geometry), so a step that
+   had already succeeded was judged a failure.
+2. **The retry then blinded the perception.** Retrying a `type` on the search box
+   selects the field first (`ctrl+A`) so the new text *replaces* the old. A
+   selected field renders inverted, and **Windows OCR returns nothing for
+   inverted text** — the field line disappears from the capture, the search box
+   vanishes from the `ScreenModel` (`screen: "unknown"`), and the second
+   verification failed as well.
+
+**Fixes:**
+
+- **Verification settling (`backend/perception/real_perception.js`).** Mutating
+  steps (`click`/`type`/`press`/`scroll`) now re-perceive within a bounded settle
+  window (`agent.verifySettleMs`, default 2500 ms; `agent.verifyPollMs`, default
+  250 ms) instead of trusting one snapshot. Read-only steps still verify from a
+  single look. The settle loop never re-executes the action, so a slow render can
+  no longer cause a destructive retry.
+- **Structure-derived search field (`backend/perception/real_ocr.js`).** When the
+  field's own text is unreadable (selected/collapsed), the control is still
+  resolved from the filter-tab row directly beneath it (`All / Unread / Favorites
+  / Groups`), and the screen still classifies as `chat_list`. The derived element
+  carries `query: ""` and `derived: "structure"`, so it can never pose as
+  evidence that typed text landed — a missing query still fails honestly.
+- Previously added in this pass and kept: foreground-drift detection
+  (`drift.expected` / `drift.actual`), orchestrator recovery (Escape + refocus,
+  bounded by the step's retry budget), verified `SetForegroundWindow` retries in
+  `win-agent.ps1`, perception-backed `wait(condition)` polling, and the OCR
+  chrome/region filters (taskbar, browser chrome, left-panel search region).
+
+### Test Results
+
+#### Root cause — live reproduction
+**Result:** **CONFIRMED** (screenshots + raw OCR at every step)
+* Typing reaches the app and is read back as `"Q Dad"` → `search_box.query = "Dad"`
+  with real results (`Bala Dad..`, `Mounesh Dad`, `Muthish Dad`).
+* `ctrl+A` on the field leaves the text **selected**; the same screen then yields
+  **no** field line at all → `screen=unknown`, `search_box: NONE`.
+* Clicking the field restores readability, confirming the control was present and
+  clickable the whole time.
+
+#### Pipeline-specific self healing (type verification)
+**Result:** **PASS**
+* **Command:** `node --test tests/real_perception.test.js`
+* **Validation:** a query that renders on the second look verifies as success
+  (no false failure); a query that never appears still fails after the settle
+  window; a `derived: "structure"` box never passes a type check; a successful
+  action that loses the foreground fails with drift info.
+
+#### Search-field resolution
+**Result:** **PASS**
+* **Command:** `node --test tests/real_ocr.test.js`
+* **Validation:** the unreadable-field capture still yields exactly one
+  `search_box` at the field's row inside the left panel with `query: ""`, and a
+  readable field still wins over the tab-derived row.
+
+#### Orchestrator recovery
+**Result:** **PASS**
+* **Command:** `node --test tests/orchestrator_recovery.test.js`
+* **Validation:** a step that never verifies is reported as failed (never a false
+  success, and never marked executed); foreground drift triggers
+  `recover({ refocus: "WhatsApp" })` and the step is retried; a non-drift failure
+  retries without recovery.
+
+#### Live desktop end-to-end
+**Result:** **PASS**
+* **Command:** `node --test tests/real_desktop.test.js` → **1/1**, ~3.4 s per run
+  (4 consecutive runs), all 8 steps to `task_done`.
+* **Validation:** the run started from a hostile leftover state (field left
+  selected/unreadable by the crashed session) and recovered through it: the click
+  resolved the field via `derived: "structure"` at `(246,193)`, the type step
+  verified on attempt 1, and the final `read_screen` perceived the real Dad
+  results.
+* **Not claimed:** foreground drift was exercised by unit tests, not by a live
+  interference scenario on this machine.
+
+#### Regression
+**Result:** **PASS**
+* Full suite: `node --test "tests/**/*.test.js"` → **70 passed, 0 failed,
+  0 skipped** (previously 59 passed / 1 failed — the live desktop test).
+
+## 8. P3: Intent + Task Engine (Tickets 201–300)
+
+Milestone: the task-engine pipeline from the master catalog — structured command
+→ task spec → **task graph** → validated node chain → ACT/OBSERVE/VERIFY per node
+→ recovery → result/spoken/UI/audit/history/events. Lives in
+`pipelines/p3_task_engine/`; ticket-to-module map in
+[`pipelines/CATALOG.md`](./pipelines/CATALOG.md).
+
+### What Was Done
+- **Command intake + spec** (`command_contract.js`, `task_spec.js`): receives a
+  structured command or raw text, keeps the original **and** the normalized copy,
+  and derives type, application, target entity, requested action, expected
+  result, constraints, dependencies, action sequence, confirmation
+  requirements, priority, timeout, max retries and verification requirement. The
+  action sequence and risk classification come from the existing
+  `backend/agent/planner.js` and `backend/agent/risk.js` — not a second copy.
+- **Task graph** (`task_graph.js`): one task node, one node per planned step
+  (action/observation), plus a verification **and** recovery node for every
+  mutating action. `validate()` rejects a graph with cycles, unreachable nodes,
+  or an action that has no verification/recovery node.
+- **Honest gating**: impossible tasks (no understood action, unopenable
+  application), missing information and unresolved references ("open **it**")
+  are detected *before* execution. Ambiguity is asked about, not guessed:
+  `Open it and search for Dad` → *'What does "it" refer to?'* → the answer is
+  folded into the command, the task is re-derived, resumed and completed.
+- **Execution + recovery** (`task_engine.js`): each node runs ACT → OBSERVE →
+  VERIFY. Mutating steps are verified through the same perception interface the
+  orchestrator uses, and a failed step takes the recovery path (bounded retries,
+  re-perception, re-plan after mismatch, rollback when the step supports it,
+  and honest `rollback_unsupported` events when it does not). An action that
+  could never be verified is reported as a **failure — never a false success**.
+- **Lifecycle** (`task_state_machine.js`, `task_tracker.js`, `task_events.js`,
+  `task_history.js`): allowed transitions only (invalid ones are recorded and
+  refused), node/retry/timing tracking, ordered task/step/verification/failure/
+  success events, audit record, bounded history with JSON export/load, and
+  guards against duplicate, stale and concurrent tasks.
+
+### Test Results
+
+#### Unit — task pipeline
+**Result:** **PASS**
+* **Command:** `node --test tests/task_engine_pipeline.test.js` → **28/28**
+  (tickets 284–300 numbered, plus coverage for 201–283).
+* **Validation:** simple + multi-step commands run their exact planned sequence;
+  cancellation stops execution and cannot be retried; a failed verification is
+  honest and retries within budget; timeout aborts with `timed_out`; recovery
+  re-perceives, re-plans and completes; ambiguous commands ask and then complete
+  once answered; impossible/unsafe/duplicate/concurrent commands are refused with
+  the right reason; tracker + history round-trip through JSON; event ordering is
+  dense and monotonic; two identical runs produce byte-identical event streams
+  (deterministic orchestration).
+
+#### Live desktop — real task engine on the real machine
+**Result:** **PASS (with a recovery path that is exercised for real)**
+* **Command:** `node demo/task-engine-demo.js "Open WhatsApp and search for Dad"`
+* **Validation:** 46 events from `task_submitted` to `notify_ui`; the graph's 12
+  nodes completed, the medium-risk `type` step passed through the confirmation
+  gate, and the result was `status=succeeded`, `spoken="Done."`,
+  `ui=WhatsApp shows search results for "Dad"` in **3.7 s**.
+* 6 further consecutive live runs all succeeded (3 clean, 3 recovering after a
+  step failure on the first retry).
+
+#### Live failure found and fixed: dropped keystrokes on retry
+**Result:** **RECOVERED (root trigger not fully isolated)**
+* On the live desktop the `type` step intermittently loses its characters: the
+  field ends up with its text **selected and unreplaced**. Screenshots taken
+  before/after the tool call show a normal readable `Dad` *before* the call and a
+  highlighted (selected) `Dad` *after* it — the `ctrl+A` reaches the app but the
+  characters that follow do not land. Windows OCR cannot read inverted (selected)
+  text, so perception reports an unreadable field and verification fails. The old
+  retry made it worse: every attempt re-sent `ctrl+A`, re-selecting the same text,
+  so all attempts failed and the whole task failed.
+* **Fix (three places, same principle — a retry must restore the input state):**
+  1. `ToolBox.type` re-resolves and clicks its target when the step asks for
+     `args.refocus` (only then — clicking on the first attempt lands a second
+     click ~400 ms after the plan's own click step, which the field reads as a
+     double-click).
+  2. The orchestrator sets `refocus` on a `type` step whose verification failed,
+     logging `retry_refocus`.
+  3. The task engine's recovery does the same before re-acting: `recover({refocus})`
+     (Escape + verified refocus) then re-runs the focus-establishing dependency
+     (the `click`) the plan already declares — it never re-acted blindly.
+* **Verified live:** with the refocus the retry lands in ~0.6 s; without it, every
+  attempt failed.
+* **Honest limitation:** the underlying trigger for the dropped characters was
+  **not** isolated. An isolated `click → ctrl+A → type` sequence replaced the text
+  16/16 times (300 ms and 1300 ms gaps), and adding a pre-click to every attempt
+  did not stop the first attempt from failing — so it depends on the surrounding
+  live flow, not on the gap or the click alone. The system now detects it honestly
+  (never a false success) and recovers, at the cost of one wasted settle window
+  (~2.7 s) when it happens.
+* **Covered by:** "task: a retry restores focus before re-acting (the live
+  failure mode)" plus the live runs below.
+
+#### Regression
+**Result:** **PASS**
+* Live end-to-end (`node --test tests/real_desktop.test.js`): **12 consecutive
+  runs passed** (~6.8 s each; the extra time is the wasted first attempt + its
+  2.5 s settle window), previously failing intermittently.
+* Full suite: `node --test "tests/**/*.test.js"` → **98 passed, 0 failed,
+  0 skipped** (70 before this pipeline).
+
+## 9. P2: AssemblyAI / Voice Understanding (Tickets 101–200)
+
+Milestone: the missing middle layer between the frozen P1 transport and P3 —
+turning a transcript into a validated **StructuredCommand** with entities,
+request type, ambiguity and command-level risk. Lives in
+`pipelines/p2_assemblyai/`.
+
+The pipeline is now: **Voice → P1 transport → P2 understanding →
+StructuredCommand → P3 Task Engine → Planner/Task Graph → ACT → OBSERVE →
+VERIFY → RECOVERY → RESULT.**
+
+### What Was Done
+
+**Ownership resolved first, because it dictated the shape of everything else:**
+
+- **101–120 are satisfied by P1, not reimplemented.** P2 imports P1's
+  `AssemblyAiResilienceManager`, `TranscriptProcessor`, `VoiceMetricsCollector`
+  and `VoiceInputPipeline`, and a delegation test asserts **class identity** for
+  each — so wiring P2 cannot create a second client, stream or deduplicator.
+  The ticket-by-ticket mapping lives in `p1_transport.js`.
+- **101/102 test-number collision resolved without renumbering P1.** Those two
+  labels in `tests/voice_input_pipeline.test.js` are P1 verification
+  continuations (dedup + self-healing), not P2's tickets 101/102. P1's file is
+  untouched; P2's numbered tests start at 185. The overlap is recorded in
+  `TEST_NUMBER_COLLISION` and documented in the catalog.
+- **COMMAND risk vs ACTION risk separated into one clear boundary.**
+  `risk.js` gained a grouped `HIGH_RISK_CATEGORIES` export (same RegExp objects,
+  same 16 patterns, action behaviour proven unchanged by the existing tests) and
+  P2's `command_risk.js` labels those categories for the *utterance* while
+  adding command-only ones (credentials, file deletion, system control,
+  installation, permission). A test asserts the shared categories are the same
+  RegExp objects — there is no second word list.
+- **Ambiguity is asked once.** P2 detects it and generates the question; P3
+  consumes that question instead of re-deriving one.
+- **Application vocabulary (P2) vs capability (P3)** kept distinct, with a seam
+  test asserting P2 can name every application P3 can open.
+
+**Then the understanding itself (121–152):** cancellation (anchored — "stop the
+video" is not a cancellation), correction ("no wait open notepad" → the
+corrected tail becomes the command text), repeat detection, filler detection and
+removal, quote-aware phrase boundaries, multi-step/chained/conditional
+structure, exact-span entities (applications, people, quotes, numbers, URLs,
+shortcuts, directions), multi-label request types with evidence spans, and
+ambiguity + clarification generation.
+
+**Safety (153–164), schema (165–167), plumbing (168–184):** command risk
+categories with exact match spans; a strict StructuredCommand schema that
+rejects malformed commands — including entity spans that do not match the text
+they claim to describe; command + AssemblyAI latency, confidence and turn
+metadata; malformed/unknown event handling; bounded turn waiting with a
+voice-failure path.
+
+### Test Results
+
+#### P2 pipeline
+**Result:** **PASS**
+* **Command:** `node --test tests/p2_understanding_pipeline.test.js` → **31/31**.
+* **Validation:** 101–120 delegation (including class-identity checks and full
+  range coverage), 121–125 hygiene, 126–132 exact-span entities, 133–136
+  segmentation, 137–148 request types, 149–152 ambiguity, 153–164 command risk
+  + vocabulary ownership, and the numbered contract tests **185–200**:
+  transcript conversion, turn detection, deduplication (driving P1's real
+  processor), malformed events, reconnect/retry bounds (driving P1's real
+  manager), timeout, cancellation, multi-step, ambiguous, dangerous, schema,
+  session isolation, concurrent sessions, shutdown, "no duplicate commands",
+  and the complete P1 → P2 → P3 chain with deterministic fixtures.
+
+#### Live end-to-end (real desktop)
+**Result:** **PASS**
+* **Command:** `node demo/task-engine-demo.js "Open WhatsApp and search for Dad"`
+* **Validation:** P2 produced a schema-valid command —
+  `entities=[application:WhatsApp, person:Dad]`, `steps=[open(WhatsApp),
+  search(for Dad)]`, `risk=none` — which P3 executed to `succeeded` /
+  `spoken="Done."` with **13 nodes completed**; the audit record carried
+  `intent`, `requestType`, `entities`, `turnId`, `sessionId`,
+  `commandLatencyMs=6`, `commandRisk` (the metadata P3 previously had no source
+  for). Command latency (utterance → validated command) was **6 ms**.
+* Cancellation path live: `"never mind"` → `stage=cancelled`, **no task created**.
+* Ambiguity path live: `"open it and search for Dad"` → `ambiguous=true`,
+  `clarification="Which application should I use?"`, `stage=awaiting_clarification`
+  (P3 asked P2's question; nothing was mutated).
+* Existing live flow: `node --test tests/real_desktop.test.js` → **4/4 runs
+  passed** once the desktop was back in its expected state (3.4 s, 3.4 s, 3.8 s
+  clean; 4.2 s and 6.8 s with one recovery each). **The same test failed 9/9
+  times while a different browser tab was active** — see the limitations below.
+
+#### Honest limitations
+* **Request classification and command risk are cue-based.** They are declared
+  in auditable tables and never guess beyond their cues, but a word outside the
+  vocabulary (or a sentence that uses one in an unusual way) will be
+  misclassified. Two concrete consequences observed while building this:
+  a destructive-sounding word inside an otherwise benign request raises the
+  command risk level (a false positive that costs one confirmation prompt), and
+  an application name that is also an ordinary word ("code", "files") is only
+  recognised when capitalised or preceded by a cue.
+* **Filler removals are reported by text, not by span** — each removal shifts
+  the rest of the string, so a span would describe a string that no longer
+  exists. Entity spans, by contrast, are exact and schema-validated.
+* **Confidence is `null` on the real path**: P1 does not report transcript
+  confidence, and P2 does not invent a value (the schema allows `null`).
+* **Person recognition is a capitalisation heuristic**, boosted by a contact
+  list; it excludes verbs and UI nouns ("Save button") but cannot be more
+  precise than the casing it is given.
+* **Not claimed:** no live AssemblyAI microphone session was run in this pass —
+  the live evidence above starts from a *final transcript event* (the P1
+  boundary), because this machine has no SoX/microphone backend. P1's own
+  transport behaviour is covered by its frozen tests.
+* **Application focus is window-level, not tab-level (found during this pass).**
+  Nine consecutive live runs failed while the Opera window had a DuckDuckGo
+  results page active and WhatsApp Web sitting in another tab: `open_app`
+  focused the *window*, every click and keystroke then acted on the wrong page,
+  and perception still reported `screen=chat_list` — the page's text contains
+  "WhatsApp" plus the filter words the classifier looks for, so it was accepted
+  as WhatsApp. Restoring the WhatsApp tab made 4/4 runs pass. This is a real
+  P4/P5 gap (select the right document/tab; reject a WhatsApp-*looking* page
+  that is not WhatsApp), and it means live results are only meaningful when the
+  desktop is in the expected state.
+* **A hypothesis tested and rejected, recorded rather than hidden.** The
+  keystroke loss looked like a modifier race between the separate `ctrl+a` and
+  text injections, so it was implemented as a single atomic `typeclear` command
+  in the Win32 agent and measured: it did **not** help (the failures persisted,
+  and the agent reported `success=true` in every failing run), so the change was
+  fully reverted. The residual keystroke loss is rare — 1 of the 4 valid runs
+  needed the refocus retry and recovered — and its trigger remains unexplained.
+
+#### Regression
+**Result:** **PASS**
+* Full suite: `node --test "tests/**/*.test.js"` → **129 passed, 0 failed,
+  0 skipped** (98 before this pipeline).
+

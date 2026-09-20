@@ -156,6 +156,50 @@ The system is decomposed into 10 decoupled pipelines of 100 implementation ticke
 ---
 
 ## P2: AssemblyAI / Voice Understanding (Tickets 101–200)
+**Status: Implemented in `pipelines/p2_assemblyai/` — P1 → P2 → P3 verified live on the real desktop (`demo/task-engine-demo.js`).**
+
+Ownership boundaries (explicit, so nothing is duplicated or in conflict):
+
+- **101–120 are DELEGATED to the frozen P1 transport.** P2 imports P1's
+  `AssemblyAiResilienceManager`, `TranscriptProcessor`, `VoiceMetricsCollector`
+  and `VoiceInputPipeline` and creates no second client, stream or deduplicator.
+  Mapping and cross-references: `pipelines/p2_assemblyai/p1_transport.js`
+  (`P1_TRANSPORT_DELEGATION`), asserted by a delegation test that compares class
+  identity.
+- **Test-number collision resolved without renumbering anything.** P1's suite
+  contains tests labelled "101." and "102."; those are P1 verification
+  continuations (dedup, self-healing), *not* P2 tickets 101/102. P1's file is
+  untouched, and P2's numbered tests are 185–200 — recorded in
+  `TEST_NUMBER_COLLISION` so the ticket↔test map stays unambiguous.
+- **COMMAND risk (P2) vs ACTION risk (`backend/agent/risk.js`).** P2 classifies
+  what the *utterance* asks for (`command_risk.js`) and reuses the shared RegExp
+  vocabulary exported by `risk.js` (`HIGH_RISK_CATEGORIES`) instead of copying
+  it. Action risk keeps classifying each concrete step, unchanged.
+- **Ambiguity (P2) vs feasibility (P3).** P2 owns "could a human tell what was
+  meant?" and produces the clarification question; P3 owns "can this machine do
+  it?" and asks *P2's* question rather than inventing a second one.
+- **Application vocabulary (P2) vs capability (P3).** P2 recognises application
+  *mentions*; P3's `SUPPORTED_APPLICATIONS` stays the authority on what can be
+  opened. A seam test asserts P2 can name every application P3 can open.
+
+Implementation map:
+
+- `p1_transport.js` — **101–120** (delegation map, cross-references, collision record).
+- `text_scan.js` — shared quote-aware tokens/spans (every span is an exact slice).
+- `utterance_hygiene.js` — **121–125**: cancellation, correction, repeat, filler detect/remove.
+- `phrase_segmenter.js` — **133–136**: boundaries, multi-step, chained, conditional.
+- `entity_preserver.js` — **126–132**: applications, people, quotes, numbers, URLs, shortcuts, directions.
+- `request_classifier.js` — **137–148**: multi-label request types, per step.
+- `ambiguity_analyzer.js` — **149–152**: ambiguity marking + clarification generation.
+- `command_risk.js` — **153–164**: COMMAND risk categories, permission + confirmation requirement.
+- `command_schema.js` — **165–167**: StructuredCommand schema, strict validation, rejection.
+- `understanding_pipeline.js` — **168–184**: assembly, dispatch, latency/confidence/turn metadata, malformed events, bounded turn waiting, voice failure.
+- `integration.js` — the P1 → P2 → StructuredCommand → P3 chain (cancellation routing, informational requests, duplicate refusal).
+
+Flow: `Voice → P1 transport → P2 understanding → StructuredCommand → P3 Task Engine → Planner/Task Graph → ACT → OBSERVE → VERIFY → RECOVERY → RESULT`
+
+Tests: `tests/p2_understanding_pipeline.test.js` — tickets **185–200** numbered, plus 101–120 delegation tests and 121–184 coverage. Fixtures: `tests/fixtures/utterances.json`.
+
 101. Initialize AssemblyAI client.
 102. Configure realtime transcriber.
 103. Configure speech model.
@@ -260,6 +304,22 @@ The system is decomposed into 10 decoupled pipelines of 100 implementation ticke
 ---
 
 ## P3: Intent + Task Engine (Tickets 201–300)
+**Status: Implemented in `pipelines/p3_task_engine/` — verified against the real desktop via `demo/task-engine-demo.js`.**
+
+Implementation map:
+
+- `command_contract.js` — **201, 204, 205**: receive a structured command (or raw text), keep the original and the normalized copy, derive the duplicate fingerprint.
+- `task_spec.js` — **206–218, 226–228, 230**: command type, application, target entity, requested action, expected result, constraints, dependencies, action sequence (from the deterministic planner), confirmation requirements, priority, timeout, max retries, verification requirement; impossible-task / missing-information / ambiguity detection; clarification application.
+- `task_graph.js` — **219–225, 229**: task, action, observation, verification and recovery nodes with dependencies, graph validation (reachability, cycles, every mutating action verified + recoverable), clarification request.
+- `task_tracker.js` — **232–243**: current / completed / failed / skipped nodes, retry counts, timestamps, duration, application + screen context, expected screen/element/state.
+- `task_state_machine.js` — **272–283**: allowed transitions only, invalid transitions recorded and refused, cancellation / timeout / resume / retry / success / failure / cleanup.
+- `task_events.js` — **264–271**: task, step, verification, failure and success events, plus voice / UI / logger notification and the ordered event log.
+- `task_history.js` — **262, 263**: audit record and bounded task history (JSON export/load).
+- `task_engine.js` — **201–261, 274–283**: submit → spec → graph → validated node chain → ACT/OBSERVE/VERIFY per node → recovery (re-perceive, refocus, re-plan, rollback) → result, spoken response, UI result, events; guards against duplicate, stale and concurrent tasks.
+
+Tests: `tests/task_engine_pipeline.test.js` — tickets **284–300** numbered, plus coverage tests for 201–283.
+Live demo: `node demo/task-engine-demo.js "Open WhatsApp and search for Dad"`.
+
 201. Receive structured voice command.
 202. Create task ID.
 203. Create task state.

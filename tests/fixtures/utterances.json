@@ -1,0 +1,126 @@
+{
+  "notes": "Deterministic transcript fixtures for P2 (tickets 121-200). Spans are asserted against the COMMAND text (post-correction, filler-stripped); originalText keeps the raw transcript.",
+  "utterances": [
+    {
+      "id": "open_and_search",
+      "text": "Open WhatsApp and search for Dad",
+      "expect": {
+        "intent": "execute",
+        "requestType": "application",
+        "steps": 2,
+        "ambiguous": false,
+        "risk": "none",
+        "confirmationRequired": false,
+        "entities": [
+          { "type": "application", "text": "WhatsApp" },
+          { "type": "person", "text": "Dad" }
+        ]
+      }
+    },
+    {
+      "id": "filler_and_quoted",
+      "text": "um so open notepad and type \"hello world\" please",
+      "expect": {
+        "intent": "execute",
+        "requestType": "typing",
+        "steps": 2,
+        "risk": "none",
+        "entities": [
+          { "type": "application", "text": "notepad" },
+          { "type": "quoted", "text": "\"hello world\"" }
+        ],
+        "cleaned": "open notepad and type \"hello world\""
+      }
+    },
+    {
+      "id": "cancellation",
+      "text": "never mind",
+      "expect": { "intent": "cancellation", "cancelled": true, "steps": 0 }
+    },
+    {
+      "id": "correction",
+      "text": "no wait open notepad",
+      "expect": { "intent": "correction", "commandText": "open notepad", "originalText": "no wait open notepad" }
+    },
+    {
+      "id": "conditional",
+      "text": "if the file is open then save it",
+      "expect": { "conditional": true, "steps": 1, "ambiguous": false, "stepVerb": "save" }
+    },
+    {
+      "id": "destructive",
+      "text": "delete everything in the folder",
+      "expect": {
+        "risk": "high",
+        "confirmationRequired": true,
+        "riskCategories": ["destructive", "file_deletion"]
+      }
+    },
+    {
+      "id": "financial",
+      "text": "transfer 500 to Amma",
+      "expect": { "risk": "high", "confirmationRequired": true, "riskCategories": ["financial"], "numbers": ["500"] }
+    },
+    {
+      "id": "credentials",
+      "text": "show me the saved password",
+      "expect": { "risk": "high", "riskCategories": ["credentials"] }
+    },
+    {
+      "id": "system_control",
+      "text": "restart the computer",
+      "expect": { "risk": "high", "riskCategories": ["system_control"] }
+    },
+    {
+      "id": "installation",
+      "text": "install spotify",
+      "expect": { "risk": "medium", "riskCategories": ["installation"] }
+    },
+    {
+      "id": "permission",
+      "text": "open the file as administrator",
+      "expect": { "risk": "medium", "permissionRequired": true, "confirmationRequired": true, "riskCategories": ["permission"] }
+    },
+    {
+      "id": "url_and_shortcut",
+      "text": "go to https://web.whatsapp.com and press ctrl+shift+t",
+      "expect": {
+        "requestType": "navigation",
+        "entities": [
+          { "type": "url", "text": "https://web.whatsapp.com" },
+          { "type": "shortcut", "text": "ctrl+shift+t" }
+        ]
+      }
+    },
+    {
+      "id": "ambiguous_reference",
+      "text": "open it and search for Dad",
+      "expect": { "ambiguous": true, "clarificationField": "application" }
+    },
+    {
+      "id": "informational",
+      "text": "what's my bank balance",
+      "expect": { "intent": "answer", "requestType": "question", "risk": "none" }
+    },
+    {
+      "id": "directions",
+      "text": "scroll down and click the Save button",
+      "expect": {
+        "requestType": "clicking",
+        "steps": 2,
+        "ambiguous": false,
+        "entities": [{ "type": "direction", "text": "down" }]
+      }
+    },
+    {
+      "id": "repeat_source",
+      "text": "open notepad",
+      "expect": { "intent": "execute", "steps": 1 }
+    }
+  ],
+  "turnEvents": [
+    { "transcript": "Open WhatsApp", "end_of_turn": false, "turn_order": 1 },
+    { "transcript": "Open WhatsApp and search", "end_of_turn": false, "turn_order": 1 },
+    { "transcript": "Open WhatsApp and search for Dad", "end_of_turn": true, "turn_order": 1 }
+  ]
+}

@@ -57,15 +57,29 @@ JavaScript (V8 engine) is used for the orchestrator, state machines, API server,
 - **Python Usage**: 0%.
 
 ### P2: AssemblyAI / Voice Understanding (Tickets 101–200)
-- **Primary Technology**: JavaScript (Node.js WebSocket streaming).
-- **Components**: Realtime duplex streaming, command schema validation, phrase boundary parsing, entity preservation (applications, contact names, URLs, shortcuts).
-- **Reaction Time**: Network bound (~150ms round-trip to AssemblyAI realtime servers); local parsing takes < 0.5ms.
+- **Primary Technology**: JavaScript (Node.js). Transport is SHARED with P1 — no second client or stream exists.
+- **Components** (`pipelines/p2_assemblyai/`):
+  - `p1_transport.js`: 101–120 delegated to the frozen P1 modules (delegation map + cross-references).
+  - `text_scan.js` / `utterance_hygiene.js` (121–125) / `phrase_segmenter.js` (133–136): quote-aware spans, cancellation, correction, repeat, filler removal, boundaries, multi-step/chained/conditional structure.
+  - `entity_preserver.js` (126–132): exact-span entities — applications, people, quoted text, numbers, URLs, shortcuts, directions (`text === slice(start, end)`, enforced by schema validation).
+  - `request_classifier.js` (137–148) / `ambiguity_analyzer.js` (149–152): cue-based multi-label request types with evidence spans; ambiguity marking and clarification questions.
+  - `command_risk.js` (153–164): COMMAND risk (destructive, external comms, financial, credentials, file deletion, system control, installation, permission) built on the vocabulary exported by `backend/agent/risk.js`.
+  - `command_schema.js` (165–167) + `understanding_pipeline.js` (168–184): StructuredCommand assembly, strict validation + rejection, command/AssemblyAI latency, confidence and turn metadata, malformed/unknown event handling, bounded turn waiting, voice-failure notification.
+  - `integration.js`: the P1 → P2 → StructuredCommand → P3 chain.
+- **Reaction Time**: in-process and synchronous — live command latency (utterance → validated StructuredCommand) **6 ms**; transport latency stays P1's (network bound).
 - **Python Usage**: 0%.
+- **Cross-pipeline gaps found while live-verifying this pipeline** (neither belongs to P2, so they are recorded, not fixed here):
+  - **Focus is window-level, not tab-level** (P4/P5). `open_app` focuses the *window*; if the browser window has a non-WhatsApp tab active, clicks and keystrokes act on that page while perception still reports `screen=chat_list` (the page's text contains the cue words). Nine consecutive live runs failed this way and 4/4 passed once the WhatsApp tab was active again.
+  - **Recovery must restore the required state** (P6). The engine/ToolBox recovery (Escape + verified refocus + re-running the focus dependency) works, but the underlying keystroke loss is rare and still unexplained — see `SETUP_AND_TESTS.md` §9 limitations, including a hypothesis that was implemented, measured and reverted.
 
 ### P3: Intent + Task Engine (Tickets 201–300)
 - **Primary Technology**: JavaScript (Node.js).
-- **Components**: In-memory Task Graph, TaskState, Risk Classifier, Action Sequencer, Planner.
-- **Reaction Time**: < 1ms synchronous planning time.
+- **Components** (`pipelines/p3_task_engine/`):
+  - `command_contract.js` / `task_spec.js`: structured command intake, deterministic spec derivation (type, application, target, expectations, constraints, dependencies, timeout, retries), impossible / missing / ambiguous detection (reuses the existing `planner.js` and `risk.js`).
+  - `task_graph.js`: task / action / observation / verification / recovery nodes with dependency validation.
+  - `task_engine.js`: node execution (ACT → OBSERVE → VERIFY), bounded recovery (re-perceive, refocus, re-plan, rollback), abort paths, state-machine guards.
+  - `task_tracker.js` / `task_events.js` / `task_history.js`: node + timing tracking, ordered task/step/verification/failure/success events, audit record and bounded history.
+- **Reaction Time**: < 1ms synchronous planning/graph time; live end-to-end (graph → validated → 12 nodes → success) **3.7s** including all perception and input latency.
 - **Python Usage**: 0%.
 
 ### P4: Screen Perception Pipeline (Tickets 301–400)
@@ -129,4 +143,6 @@ JavaScript (V8 engine) is used for the orchestrator, state machines, API server,
 | **C++ Native Utilization** | Used where sub-millisecond reaction needed | Win32 SendInput, Job Object, onnxruntime.dll C++ engine | **VERIFIED** |
 | **JavaScript Allocation** | Used for most (orchestrator, streaming, logic) | 100% of pipeline orchestration, API, VAD, state machine | **VERIFIED** |
 | **Pipeline 1 Implementation** | Full 001–100 tickets implemented & wired | `pipelines/voice_input/` fully passing 25/25 test tickets | **VERIFIED** |
+| **Pipeline 2 Implementation** | Full 101–200 tickets implemented | 101–120 delegated to P1 (no reimplementation); 121–200 in `pipelines/p2_assemblyai/` — 31/31 P2 tests + live P1→P2→P3 run | **VERIFIED** |
+| **Pipeline 3 Implementation** | Full 201–300 tickets implemented | `pipelines/p3_task_engine/` passing 28/28 test tickets + live desktop run (`demo/task-engine-demo.js`) | **VERIFIED** |
 | **Perception Latency** | < 100ms per screen scan | ~45ms using native ONNX runtime | **VERIFIED** |
