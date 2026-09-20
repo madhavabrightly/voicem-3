@@ -55,10 +55,13 @@ export class Orchestrator {
     task.plan(steps);
     this.logger.log("decision", "plan", { steps: steps.map((s) => s.type) });
 
+    let taskAppName = null; // open_app target, used to refocus after drift
+
     for (let i = 0; i < steps.length; i++) {
       task.currentStepIndex = i;
       const step = steps[i];
       this.logger.log("decision", "step_start", { step: step.type, target: step.target });
+      if (step.type === "open_app") taskAppName = step.target;
 
       // --- risk gate ---
       const risk = requiresConfirmation(step, this.config);
@@ -74,7 +77,9 @@ export class Orchestrator {
 
       // --- bounded retry loop: ACT -> OBSERVE -> VERIFY ---
       let stepResult = null;
+      let lastVerify = null;
       const maxAttempts = this.maxRetries;
+      const mustVerify = this.config?.agent?.verifyEveryAction !== false && step.verifiable !== false;
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         task.recordAttempt(i);
         this.logger.log("action", "act", { attempt, step: step.type, target: step.target });
@@ -84,14 +89,24 @@ export class Orchestrator {
 
         if (!stepResult.success) {
           this.logger.log("verification", "action_failed", { attempt, error: stepResult.error });
+          await this._recoverIfDrifted(stepResult.data?.drift, taskAppName, attempt);
           continue; // retry
         }
 
         // --- VERIFY via perception ---
-        if (this.config?.agent?.verifyEveryAction !== false && step.verifiable !== false) {
-          const verify = await this.perception.verify(step);
-          this.logger.log("verification", "verify", { attempt, passed: verify.success, data: verify.data });
-          if (!verify.success) {
+        if (mustVerify) {
+          lastVerify = await this.perception.verify(step);
+          this.logger.log("verification", "verify", { attempt, passed: lastVerify.success, data: lastVerify.data });
+          if (!lastVerify.success) {
+            await this._recoverIfDrifted(lastVerify.data?.drift, taskAppName, attempt);
+            // A retried type step must re-focus its target: the failed attempt
+            // can leave the field selected-but-unreplaced (patched text that
+            // never landed), which OCR cannot read and which would make the
+            // retry fail in exactly the same way.
+            if (step.type === "type" && step.target) {
+              step.args = { ...(step.args || {}), refocus: true };
+              this.logger.log("verification", "retry_refocus", { attempt, target: step.target });
+            }
             continue; // re-perceive on next attempt
           }
         }
@@ -104,6 +119,14 @@ export class Orchestrator {
         return this._finalize(task, stepResult);
       }
 
+      // An action that ran but could never be VERIFIED is not a success —
+      // claiming otherwise would be a false success.
+      if (mustVerify && lastVerify && !lastVerify.success) {
+        this.logger.log("verification", "verification_exhausted", { step: step.type, attempts: maxAttempts });
+        task.markFailed(`verification failed: ${step.type} ${step.target || ""}`);
+        return this._finalize(task, ToolResult.fail(step.type, `Could not verify ${step.type} ${step.target || ""}`, lastVerify.data));
+      }
+
       task.executed.push({ step: step.type, target: step.target, result: stepResult.toJSON() });
       this.logger.log("decision", "step_done", { step: step.type });
     }
@@ -111,6 +134,23 @@ export class Orchestrator {
     task.markDone();
     this.logger.log("verification", "task_done", { taskId: task.id });
     return this._finalize(task, ToolResult.ok("task", { done: true }));
+  }
+
+  /**
+   * Recovery for foreground drift: dismiss the interloper (Escape) and
+   * refocus the task application, so the next attempt acts on the right
+   * window. Bounded by the step's existing retry budget.
+   */
+  async _recoverIfDrifted(drift, taskAppName, attempt) {
+    if (!drift || typeof this.toolBox.recover !== "function") return;
+    this.logger.log("verification", "foreground_drift", {
+      attempt,
+      expected: drift.expected?.proc,
+      actual: drift.actual?.proc,
+    });
+    const refocus = taskAppName || drift.expected?.title || null;
+    const r = await this.toolBox.recover({ refocus });
+    this.logger.log("action", "recover", { attempt, refocus, success: r.success });
   }
 
   _finalize(task, final) {

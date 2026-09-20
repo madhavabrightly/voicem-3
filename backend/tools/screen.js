@@ -21,7 +21,7 @@ export class Screen {
     const condition = step?.args?.condition || "unspecified";
     const check = checker || (async () => true);
     const started = Date.now();
-    const timeoutMs = this.driver.waitTimeoutMs || 5000;
+    const timeoutMs = this.driver.waitTimeoutMs || 15000;
     while (Date.now() - started < timeoutMs) {
       if (await check()) return ToolResult.ok("wait", { condition });
     }

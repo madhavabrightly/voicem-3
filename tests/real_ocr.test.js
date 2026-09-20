@@ -47,3 +47,44 @@ test("real_ocr: find() resolves search_box alias", () => {
   assert.equal(model.find({ type: "search_box" }).length, 1);
   assert.equal(model.find({ name: "search_box" }).length, 1);
 });
+
+test("real_ocr: resolves the search field from the filter tabs when its text is unreadable", () => {
+  // Captured from a live session where the field held a SELECTED query: Windows
+  // OCR returns nothing for inverted (selected) text, so the field line is
+  // missing entirely even though the control is on screen and clickable.
+  const lines = [
+    { text: "WhatsApp", x: 130, y: 131, w: 104, h: 20 },
+    { text: "All", x: 143, y: 232, w: 17, h: 11 },
+    { text: "Unread 21", x: 194, y: 232, w: 61, h: 11 },
+    { text: "Favorites", x: 292, y: 232, w: 58, h: 11 },
+    { text: "Groups", x: 402, y: 233, w: 45, h: 13 },
+    { text: "Bala Dad..", x: 197, y: 330, w: 70, h: 12 },
+    { text: "Mounesh Dad", x: 197, y: 417, w: 97, h: 12 },
+  ];
+  const model = classifyWhatsAppScreen(lines);
+
+  // The app is unambiguously loaded — a missing field line must not blank the screen.
+  assert.equal(model.screen, "chat_list");
+
+  const search = model.find({ type: "search_box" });
+  assert.equal(search.length, 1, "expected the field to still be resolvable");
+  // Resolved from the row above the tabs, inside the left panel.
+  assert.ok(search[0].coordinates.x > 140 && search[0].coordinates.x < 460, `x=${search[0].coordinates.x}`);
+  assert.ok(search[0].coordinates.y > 170 && search[0].coordinates.y < 215, `y=${search[0].coordinates.y}`);
+  // Content is unknown, so no query may be claimed (typing stays unverified).
+  assert.equal(search[0].query, "");
+});
+
+test("real_ocr: a readable field still wins over the tab-derived row", () => {
+  const lines = [
+    { text: "WhatsApp", x: 130, y: 131, w: 104, h: 20 },
+    { text: "Q Dad", x: 148, y: 185, w: 55, h: 15 },
+    { text: "All", x: 143, y: 232, w: 17, h: 11 },
+    { text: "Unread 21", x: 194, y: 232, w: 61, h: 11 },
+  ];
+  const model = classifyWhatsAppScreen(lines);
+  const search = model.find({ type: "search_box" });
+  assert.equal(search.length, 1);
+  assert.equal(search[0].query, "Dad");
+  assert.equal(search[0].derived, undefined);
+});

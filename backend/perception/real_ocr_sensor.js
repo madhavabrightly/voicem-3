@@ -25,7 +25,7 @@ export class RealOcrSensor {
         return { source: "ocr", confidence: 0, elements: [], application: "unknown", screen: "unknown" };
       }
       const fg = await this.driver.foreground().catch(() => null);
-      const model = ocrLinesToModel(ocr.lines, fg);
+      const model = ocrLinesToModel(ocr.lines, fg, { width: ocr.width, height: ocr.height });
       return model;
     } catch {
       return { source: "ocr", confidence: 0, elements: [], application: "unknown", screen: "unknown" };

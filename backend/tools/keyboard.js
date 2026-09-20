@@ -6,8 +6,12 @@ export class Keyboard {
     this.driver = driver;
   }
 
-  async type(text) {
+  async type(text, { clearFirst = false } = {}) {
     if (!text) return ToolResult.fail("type", "nothing to type");
+    if (clearFirst) {
+      // Replace any existing field content so retries don't concatenate.
+      await this.driver.pressKey("ctrl+a").catch(() => {});
+    }
     const r = await this.driver.typeText(String(text));
     if (r.success) return ToolResult.ok("type", { text });
     return ToolResult.fail("type", r.error || "type failed");

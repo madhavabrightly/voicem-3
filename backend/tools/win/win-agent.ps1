@@ -97,6 +97,21 @@ function Get-WindowsByTitlePattern([string]$pattern) {
   Write-Output -NoEnumerate $script:winMatches
 }
 
+# SetForegroundWindow from a background process is flaky (foreground lock):
+# it can report success while the window only flashes in the taskbar.
+# Verify the foreground ACTUALLY changed, retrying briefly, so callers get
+# the truth instead of an optimistic "ok".
+function Set-ForegroundVerified([long]$hwndLong, [int]$attempts = 4) {
+  $h = [IntPtr]$hwndLong
+  for ($i = 0; $i -lt $attempts; $i++) {
+    if ([WinAgentNative]::IsIconic($h)) { [void][WinAgentNative]::ShowWindow($h, 9) }
+    [void][WinAgentNative]::SetForegroundWindow($h)
+    Start-Sleep -Milliseconds 350
+    if ([WinAgentNative]::GetForegroundWindow() -eq $h) { return $true }
+  }
+  return ([WinAgentNative]::GetForegroundWindow() -eq $h)
+}
+
 function Send-Json($obj) {
   $obj | ConvertTo-Json -Compress -Depth 8
 }
@@ -123,15 +138,14 @@ function Invoke-Launch([string]$name) {
     return @{ ok = $true; action = 'focus'; detail = 'already foreground'; fg = $probe }
   }
 
-  # 2) Existing visible window title contains the name -> focus it.
+  # 2) Existing visible window title contains the name -> focus it (verified).
   $windows = Get-WindowsByTitlePattern ('(?i)' + [regex]::Escape($name))
   if ($windows.Count -gt 0) {
     $w = $windows | Select-Object -First 1
-    $h = [IntPtr]$w.Hwnd
-    if ([WinAgentNative]::IsIconic($h)) { [void][WinAgentNative]::ShowWindow($h, 9) }
-    [void][WinAgentNative]::SetForegroundWindow($h)
-    Start-Sleep -Milliseconds 400
-    return @{ ok = $true; action = 'focus'; detail = 'focused existing window'; window = $w }
+    if (Set-ForegroundVerified $w.Hwnd) {
+      return @{ ok = $true; action = 'focus'; detail = 'focused existing window'; window = $w }
+    }
+    return @{ ok = $false; error = "window '$($w.Title)' found but could not be brought to the foreground" }
   }
 
   # 3) Map friendly name -> protocol/URL and launch.
@@ -158,10 +172,10 @@ function Invoke-Launch([string]$name) {
       if ($found) { break }
     }
     if ($found) {
-      $h = [IntPtr]$found.Hwnd
-      [void][WinAgentNative]::SetForegroundWindow($h)
-      Start-Sleep -Milliseconds 500
-      return @{ ok = $true; action = 'launch'; detail = 'launched web whatsapp and focused'; window = $found }
+      if (Set-ForegroundVerified $found.Hwnd) {
+        return @{ ok = $true; action = 'launch'; detail = 'launched web whatsapp and focused'; window = $found }
+      }
+      return @{ ok = $false; error = 'WhatsApp window appeared but could not be brought to the foreground' }
     }
     return @{ ok = $false; error = "launched $target but no WhatsApp window appeared" }
   }
@@ -177,10 +191,9 @@ function Invoke-Focus([string]$name) {
   $windows = Get-WindowsByTitlePattern ('(?i)' + [regex]::Escape($name))
   if ($windows.Count -eq 0) { return @{ ok = $false; error = "no window matching '$name'" } }
   $w = $windows | Select-Object -First 1
-  $h = [IntPtr]$w.Hwnd
-  if ([WinAgentNative]::IsIconic($h)) { [void][WinAgentNative]::ShowWindow($h, 9) }
-  [void][WinAgentNative]::SetForegroundWindow($h)
-  Start-Sleep -Milliseconds 400
+  if (-not (Set-ForegroundVerified $w.Hwnd)) {
+    return @{ ok = $false; error = "window '$($w.Title)' found but could not be brought to the foreground" }
+  }
   return @{ ok = $true; detail = 'focused'; window = $w }
 }
 
@@ -257,7 +270,7 @@ function Invoke-Ocr {
     }
   }
   $state.lastOcr = $lines
-  return @{ ok = $true; lines = $lines; capturePath = $cap.path }
+  return @{ ok = $true; lines = $lines; capturePath = $cap.path; width = $cap.width; height = $cap.height }
 }
 
 function Invoke-Click([int]$x, [int]$y) {

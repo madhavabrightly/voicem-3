@@ -1,5 +1,12 @@
 import { Perception } from "./index.js";
 
+// Steps that change the screen, so their effect has to RENDER before it can
+// be verified (reading the screen does not change it).
+const MUTATING_STEPS = new Set(["click", "type", "press", "scroll"]);
+// How long such an effect may take to appear, and how often to look.
+const DEFAULT_SETTLE_MS = 2500;
+const DEFAULT_POLL_MS = 250;
+
 /**
  * RealPerception — Perception-interface implementation for the live desktop.
  *
@@ -14,52 +21,112 @@ import { Perception } from "./index.js";
  *   - type:       typed text now appears in the search box
  *   - read_screen / wait / find_element: perception succeeded at all
  *
+ * Verification of a mutating step polls within a bounded settle window,
+ * because an action is only *delivered* synchronously — the application
+ * still has to process it and repaint. It also detects FOREGROUND DRIFT:
+ * once an app has been opened for the task, a mutating step that leaves a
+ * DIFFERENT process in the foreground (OS search, popup, another window)
+ * means the action hit the wrong target — verification fails with `drift`
+ * info so the orchestrator can recover (Escape + refocus) instead of
+ * blindly retrying.
+ *
  * The orchestrator / ToolBox interfaces are unchanged.
  */
 export class RealPerception extends Perception {
-  async verify(step) {
-    const model = await this.perceive({ intent: `verify ${step.type} ${step.target || ""}` });
-    const data = model.toJSON ? model.toJSON() : model;
+  /**
+   * @param {Array} sensors ordered sensor stack
+   * @param {object} [config]
+   * @param {object} [hooks]
+   * @param {() => Promise<{title:string, proc:string, pid:number} | null>} [hooks.foreground]
+   */
+  constructor(sensors, config = {}, hooks = {}) {
+    super(sensors, config);
+    this.foreground = hooks.foreground || null;
+    this._taskFg = null; // foreground info captured when the task app opened
+    this.settleMs = config?.agent?.verifySettleMs ?? DEFAULT_SETTLE_MS;
+    this.pollMs = config?.agent?.verifyPollMs ?? DEFAULT_POLL_MS;
+  }
 
-    let success = false;
+  /** True when the current foreground belongs to a different application. */
+  async _detectDrift() {
+    if (!this.foreground || !this._taskFg?.proc) return null;
+    const fg = await this.foreground().catch(() => null);
+    if (!fg?.proc) return null;
+    if (fg.proc === this._taskFg.proc || fg.pid === this._taskFg.pid) return null;
+    return { expected: this._taskFg, actual: fg };
+  }
+
+  /**
+   * Verify a step against the live screen.
+   *
+   * Mutating steps get a bounded SETTLE WINDOW: sending a keystroke or a
+   * click only hands the input to the app — the app still has to process it
+   * and repaint. A single snapshot taken right after the action therefore
+   * reports "not done" for actions that simply had not rendered yet, and the
+   * orchestrator would retry (and eventually kill) a step that worked. So
+   * re-perceive until the effect appears, or the window closes.
+   */
+  async verify(step) {
+    const mutating = MUTATING_STEPS.has(step.type);
+    const deadline = Date.now() + (mutating ? this.settleMs : 0);
+
+    for (;;) {
+      const model = await this.perceive({ intent: `verify ${step.type} ${step.target || ""}` });
+      const data = model.toJSON ? model.toJSON() : model;
+
+      if (await this._check(step, model, data)) {
+        if (!mutating) return { success: true, data };
+        // Foreground-drift gate: even a locally-consistent model is a failure
+        // if the action kicked focus out of the task app.
+        const drift = await this._detectDrift();
+        return drift ? { success: false, data: { ...data, drift } } : { success: true, data };
+      }
+
+      if (Date.now() >= deadline) return { success: false, data };
+      await new Promise((r) => setTimeout(r, this.pollMs));
+    }
+  }
+
+  /** Whether the screen now shows what `step` was supposed to change. */
+  async _check(step, model, data) {
     switch (step.type) {
       case "open_app": {
-        // WhatsApp content visible: search box present in left panel
+        // The app counts as open when its window is foreground (title match)
+        // or its content resolved in the model. Content may still be loading,
+        // so a foreground window title match is enough — the follow-up wait
+        // step verifies interactivity.
+        const target = String(step.target || "").toLowerCase();
+        const fg = this.foreground ? await this.foreground().catch(() => null) : null;
+        const titleHit = Boolean(target && fg?.title && fg.title.toLowerCase().includes(target));
         const search = model.find({ type: "search_box" });
-        success = search.length > 0 || /whatsapp/i.test(String(model.application || ""));
-        break;
+        const appHit = Boolean(target && String(model.application || "").toLowerCase().includes(target));
+        const success = titleHit || search.length > 0 || appHit;
+        if (success && fg) this._taskFg = fg;
+        return success;
       }
       case "click": {
         // A click should land on a search box; verify the search control exists
         const target = step.target || "search_box";
         const found = model.find({ type: "search_box" }) || model.find({ name: target });
-        success = found.length > 0;
-        break;
+        return found.length > 0;
       }
       case "type": {
-        // Typing goes into the focused search box. Verify a query is present
-        // by checking the search box text region has non-empty content (the
-        // typed query), OR search results matching the query are rendered.
+        // Typing goes into the focused search box. Verify the box itself now
+        // carries the query — a structure-derived box (unreadable field) has
+        // no query, so it can never pose as evidence that the text landed.
         const q = step.args?.text || "";
-        if (!q) { success = false; break; }
+        if (!q) return false;
         const search = model.find({ type: "search_box" });
-        // The OCR text of the search line will contain the typed query.
-        const anyHasQuery = data.elements?.some((e) => {
-          const text = (e.name || "").toLowerCase();
-          return text.includes(q.toLowerCase());
-        }) || data.elements?.some((e) => e.type === "search_box");
-        success = Boolean(anyHasQuery && search.length > 0);
-        break;
+        const boxHasQuery = search.some((e) => String(e.query || "").length > 0);
+        const resultsMatch = data.elements?.some((e) => String(e.name || "").toLowerCase().includes(q.toLowerCase()));
+        return Boolean(search.length > 0 && boxHasQuery && resultsMatch);
       }
       case "read_screen":
       case "wait":
       case "find_element":
       default:
         // Perception itself is the verification for read-only steps.
-        success = data.confidence > 0 && data.elements?.length > 0;
-        break;
+        return Boolean(data.confidence > 0 && data.elements?.length > 0);
     }
-
-    return { success, data };
   }
 }

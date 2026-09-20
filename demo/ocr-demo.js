@@ -69,7 +69,8 @@ for (const l of result.lines) {
 
 const model = ocrLinesToModel(
   result.lines.map((l) => ({ text: l.text, x: l.x, y: l.y, w: l.w, h: l.h })),
-  null
+  null,
+  { width: result.width, height: result.height }
 );
 console.log("\n--- ScreenModel (agent input) ---");
 console.log(JSON.stringify(model.toJSON(), null, 2));

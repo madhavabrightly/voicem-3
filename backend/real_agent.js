@@ -48,7 +48,9 @@ export function buildRealAgent({ config = {} } = {}) {
     sensors.push(new RealUiaSensor({ foreground: () => driver.foreground() }));
   }
 
-  const perception = new RealPerception(sensors, config);
+  const perception = new RealPerception(sensors, config, {
+    foreground: () => driver.foreground(),
+  });
   const toolBox = new ToolBox({ driver, perception });
   const memory = new Memory();
   const orchestrator = new Orchestrator({ perception, toolBox }, config);

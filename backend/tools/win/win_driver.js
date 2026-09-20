@@ -167,7 +167,7 @@ export class WindowsDriver {
     return { success: true, path: d.path, width: d.width, height: d.height };
   }
 
-  /** ocr() -> { success, lines:[{text,x,y,w,h,words}], capturePath } */
+  /** ocr() -> { success, lines:[{text,x,y,w,h,words}], capturePath, width, height } */
   async ocr() {
     const r = await this._cmd("ocr");
     if (!r.success) return r;
@@ -176,6 +176,8 @@ export class WindowsDriver {
       success: true,
       lines: d.lines || [],
       capturePath: d.capturePath || "",
+      width: d.width || 0,
+      height: d.height || 0,
     };
   }
 }
