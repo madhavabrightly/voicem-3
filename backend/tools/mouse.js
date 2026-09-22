@@ -16,6 +16,28 @@ export class Mouse {
     return ToolResult.fail("click", "click requires coordinates; perception must resolve target first");
   }
 
+  async doubleClick(target) {
+    if (target && typeof target.x === "number" && typeof target.y === "number") {
+      const r = typeof this.driver.doubleClick === "function"
+        ? await this.driver.doubleClick(target.x, target.y)
+        : await this.driver.click(target.x, target.y);
+      if (r.success) return ToolResult.ok("double_click", { x: target.x, y: target.y });
+      return ToolResult.fail("double_click", r.error || "double_click failed");
+    }
+    return ToolResult.fail("double_click", "double_click requires coordinates");
+  }
+
+  async rightClick(target) {
+    if (target && typeof target.x === "number" && typeof target.y === "number") {
+      const r = typeof this.driver.rightClick === "function"
+        ? await this.driver.rightClick(target.x, target.y)
+        : await this.driver.click(target.x, target.y);
+      if (r.success) return ToolResult.ok("right_click", { x: target.x, y: target.y });
+      return ToolResult.fail("right_click", r.error || "right_click failed");
+    }
+    return ToolResult.fail("right_click", "right_click requires coordinates");
+  }
+
   async scroll(direction) {
     const r = await this.driver.scroll(direction);
     if (r.success) return ToolResult.ok("scroll", { direction });

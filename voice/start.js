@@ -26,10 +26,13 @@ import { VoiceUiBridge } from "./ui_bridge.js";
 import { createScriptedVoice } from "./scripted_voice.js";
 import { parseStartArgs } from "./app_paths.js";
 
+import { WindowsVoiceInterface } from "./windows_speech.js";
+import { VoiceConfirmator } from "./voice_confirmator.js";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const UI_SCRIPT = join(HERE, "..", "ui", "screenai-voice-ui.ps1");
 
-const { simulate } = parseStartArgs(process.argv.slice(2));
+const { simulate, local } = parseStartArgs(process.argv.slice(2));
 loadEnv();
 
 function fatal(message) {
@@ -45,27 +48,43 @@ function warn(message) {
 if (!existsSync(UI_SCRIPT)) {
   fatal(`UI script not found: ${UI_SCRIPT}`);
 }
-if (!simulate && !process.env.ASSEMBLYAI_API_KEY) {
+if (!simulate && !local && !process.env.ASSEMBLYAI_API_KEY) {
   fatal("ASSEMBLYAI_API_KEY is not configured");
 }
-if (!simulate) {
+if (!simulate && !local) {
   const sox = spawnSync("sox", ["--version"], { stdio: "ignore" });
   if (sox.error) {
     warn("SoX not found on PATH - microphone capture will be unavailable until SoX is installed.");
   }
 }
 
+// ---- compose the voice engine ----------------------------------------------
+let voice;
+if (simulate) {
+  voice = createScriptedVoice();
+} else if (local) {
+  console.log("[voice] Local mode selected — using Windows Speech Recognition (offline local engine)");
+  voice = new WindowsVoiceInterface({ logger: console });
+} else {
+  voice = new VoiceInterface({ logger: console });
+}
+
+// ---- interactive voice consent gate ----------------------------------------
+const consent = process.argv.includes("--consent") || process.env.VOICE_CONSENT === "true";
+const requireConfirmationFor = consent ? ["high", "medium", "low"] : ["high"];
+const confirmator = new VoiceConfirmator({ voice, logger: console });
+
 // ---- compose the existing stack --------------------------------------------
 const { orchestrator } = buildRealAgent({
-  config: { agent: { requireConfirmationFor: [], maxRetriesPerAction: 2 } },
+  config: { agent: { requireConfirmationFor, maxRetriesPerAction: 2 } },
+  confirmator,
 });
-
-const voice = simulate ? createScriptedVoice() : new VoiceInterface({ logger: console });
 
 let bridge;
 async function shutdown(code = 0) {
   try {
     await bridge?.stop();
+    if (typeof voice?.shutdown === "function") await voice.shutdown();
   } catch {
     // already stopped
   }
@@ -76,6 +95,7 @@ bridge = new VoiceUiBridge({
   orchestrator,
   voice,
   logger: console,
+  autoRelisten: !simulate,
   onReady: () => console.log("SCREENAI_READY"),
   onQuit: () => shutdown(0),
 });

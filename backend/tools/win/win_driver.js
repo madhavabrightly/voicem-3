@@ -134,6 +134,18 @@ export class WindowsDriver {
     return { success: true, x, y };
   }
 
+  async doubleClick(x, y) {
+    const r = await this._cmd("double_click", `${x} ${y}`);
+    if (!r.success) return r;
+    return { success: true, x, y, double: true };
+  }
+
+  async rightClick(x, y) {
+    const r = await this._cmd("right_click", `${x} ${y}`);
+    if (!r.success) return r;
+    return { success: true, x, y, right: true };
+  }
+
   async typeText(text) {
     const r = await this._cmd("type", text);
     if (!r.success) return r;

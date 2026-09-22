@@ -171,6 +171,8 @@ internal static class Launcher
             string startJs = Path.Combine(appRoot, "voice", "start.js");
             List<string> passThrough = new List<string>();
             if (Has(args, "--simulate")) passThrough.Add("--simulate");
+            if (Has(args, "--local")) passThrough.Add("--local");
+            if (Has(args, "--offline")) passThrough.Add("--offline");
 
             int exitCode = debug
                 ? RunDebug(appRoot, nodePath, startJs, passThrough)

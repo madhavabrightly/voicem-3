@@ -27,6 +27,7 @@ export class Perception {
     this.sensors = sensors;
     this.config = config;
     this.threshold = config?.perception?.confidenceThreshold ?? 0.6;
+    this._lastModel = null;
   }
 
   /** Returns the semantic world model for the current screen. */
@@ -36,6 +37,7 @@ export class Perception {
       try {
         const model = await sensor.read(intent);
         if (model && model.confidence >= this.threshold) {
+          this._lastModel = model;
           return model;
         }
       } catch {

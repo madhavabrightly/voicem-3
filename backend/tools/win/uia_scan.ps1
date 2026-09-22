@@ -62,9 +62,53 @@ function Add-Element($element, [int]$depth) {
     $localizedControlType = $element.Current.LocalizedControlType
     $className = $element.Current.ClassName
     $processId = $element.Current.ProcessId
+    
+    $isEnabled = $element.Current.IsEnabled
+    $isKeyboardFocusable = $element.Current.IsKeyboardFocusable
+    $hasKeyboardFocus = $element.Current.HasKeyboardFocus
   } catch {
     return
   }
+
+  $patterns = @()
+  $isSelected = $null
+  $isExpanded = $null
+  $toggleState = $null
+  $value = $null
+
+  try {
+    $null = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+    $patterns += 'invoke'
+  } catch {}
+
+  try {
+    $togglePattern = $element.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    $patterns += 'toggle'
+    $toggleState = $togglePattern.Current.ToggleState.ToString()
+  } catch {}
+
+  try {
+    $selPattern = $element.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+    $patterns += 'selection_item'
+    $isSelected = $selPattern.Current.IsSelected
+  } catch {}
+
+  try {
+    $valPattern = $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    $patterns += 'value'
+    $value = $valPattern.Current.Value
+  } catch {}
+
+  try {
+    $null = $element.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
+    $patterns += 'scroll'
+  } catch {}
+
+  try {
+    $expPattern = $element.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    $patterns += 'expand_collapse'
+    $isExpanded = ($expPattern.Current.ExpandCollapseState.ToString() -eq "Expanded")
+  } catch {}
   $w = [double]($r.Right - $r.Left)
   $h = [double]($r.Bottom - $r.Top)
   if ($w -le 1 -or $h -le 1) { return }
@@ -78,7 +122,7 @@ function Add-Element($element, [int]$depth) {
   if ([string]::IsNullOrWhiteSpace($key)) { return }
   if (-not $script:seen.Add($key)) { return }
 
-  $script:items.Add([ordered]@{
+  $out = [ordered]@{
     source = "uia"
     role = $typeName.Replace("ControlType.", "").ToLowerInvariant()
     localized_role = $localizedControlType
@@ -98,7 +142,18 @@ function Add-Element($element, [int]$depth) {
       [int](($r.Top + $r.Bottom) / 2)
     )
     confidence = 0.95
-  }) | Out-Null
+    is_enabled = $isEnabled
+    is_keyboard_focusable = $isKeyboardFocusable
+    has_keyboard_focus = $hasKeyboardFocus
+    patterns = $patterns
+  }
+
+  if ($null -ne $isSelected) { $out['is_selected'] = $isSelected }
+  if ($null -ne $isExpanded) { $out['is_expanded'] = $isExpanded }
+  if ($null -ne $toggleState) { $out['toggle_state'] = $toggleState }
+  if ($null -ne $value) { $out['value'] = $value }
+
+  $script:items.Add($out) | Out-Null
 }
 
 function Walk-Element($element, [int]$depth) {

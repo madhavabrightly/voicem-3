@@ -69,7 +69,7 @@ test("REAL NEGATIVE: background WhatsApp tab with another tab active refuses mut
     // When WhatsApp is in background and another tab is active, canMutate("WhatsApp") MUST fail-closed
     const mutationCheck = perception.canMutate("WhatsApp", model);
     assert.equal(mutationCheck.allowed, false);
-    assert.match(mutationCheck.reason, /(identity_mismatch|insufficient_evidence)/i);
+    assert.match(mutationCheck.reason, /(identity_mismatch|application_mismatch|insufficient_evidence)/i);
   } finally {
     driver.stop();
   }

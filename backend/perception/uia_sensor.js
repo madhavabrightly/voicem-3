@@ -71,7 +71,14 @@ export class RealUiaSensor {
       .map((el) => {
         const [x1, y1, x2, y2] = el.bounds || [0, 0, 0, 0];
         const name = el.label || el.automation_id || "";
-        return {
+        const states = [];
+        if (el.is_enabled) states.push('enabled');
+        if (el.is_keyboard_focusable) states.push('focusable');
+        if (el.has_keyboard_focus) states.push('focused');
+        if (el.is_selected) states.push('selected');
+        if (el.is_expanded) states.push('expanded');
+
+        const out = {
           type: roleToType(el.role, el.label, el.automation_id),
           role: el.role,
           name,
@@ -81,7 +88,15 @@ export class RealUiaSensor {
             : { x: Math.round((x1 + x2) / 2), y: Math.round((y1 + y2) / 2) },
           confidence: el.confidence ?? 0.9,
           action: "click",
+          states,
+          patterns: el.patterns || [],
         };
+
+        if (el.toggle_state !== undefined) out.toggleState = el.toggle_state;
+        if (el.value !== undefined) out.value = el.value;
+        if (el.is_selected !== undefined) out.isSelected = el.is_selected;
+
+        return out;
       })
       .filter((e) => e.bbox.w > 0 && e.bbox.h > 0);
 

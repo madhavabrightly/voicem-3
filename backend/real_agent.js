@@ -1,8 +1,9 @@
 import { WindowsDriver } from "./tools/win/win_driver.js";
+import { UiaDriver } from "./tools/win/uia_driver.js";
 import { RealOcrSensor } from "./perception/real_ocr_sensor.js";
 import { RealUiaSensor } from "./perception/uia_sensor.js";
 import { PaddleOcrSensor } from "./perception/paddle_ocr_sensor.js";
-import { RealPerception } from "./perception/real_perception.js";
+import { P4Perception } from "../pipelines/p4_perception/index.js";
 import { ToolBox } from "./tools/index.js";
 import { Orchestrator } from "./agent/orchestrator.js";
 import { Memory } from "./memory/index.js";
@@ -12,7 +13,7 @@ import { Memory } from "./memory/index.js";
  * Orchestrator) but backed by the real Windows driver + live sensors.
  *
  *   PlatformDriver  -> WindowsDriver (persistent PowerShell win-agent)
- *   perception      -> RealPerception([uia, paddle-ocr, windows-ocr])  (ACT->OBSERVE->VERIFY)
+ *   perception      -> P4Perception([uia, paddle-ocr, windows-ocr])  (ACT->OBSERVE->VERIFY)
  *   tools           -> ToolBox(driver, perception)     (unchanged)
  *   orchestrator    -> Orchestrator(...)               (unchanged)
  *
@@ -26,8 +27,9 @@ import { Memory } from "./memory/index.js";
  *   import { buildRealAgent } from "./backend/real_agent.js";
  *   const { orchestrator } = buildRealAgent({ config });
  */
-export function buildRealAgent({ config = {} } = {}) {
+export function buildRealAgent({ config = {}, confirmator = null } = {}) {
   const driver = new WindowsDriver();
+  const uiaDriver = new UiaDriver();
   const sensors = [];
 
   // 1) Proven primary: Windows.Media.Ocr semantic sensor (unchanged behaviour).
@@ -45,14 +47,18 @@ export function buildRealAgent({ config = {} } = {}) {
 
   // 3) New: real Windows UI Automation tree (structured controls).
   if (config?.perception?.uia !== false) {
-    sensors.push(new RealUiaSensor({ foreground: () => driver.foreground() }));
+    sensors.push(new RealUiaSensor({ driver: uiaDriver, foreground: () => driver.foreground() }));
   }
 
-  const perception = new RealPerception(sensors, config, {
-    foreground: () => driver.foreground(),
+  const perception = new P4Perception({
+    driver,
+    uiaDriver,
+    sensors,
+    config,
+    hooks: { foreground: () => driver.foreground() }
   });
   const toolBox = new ToolBox({ driver, perception });
   const memory = new Memory();
-  const orchestrator = new Orchestrator({ perception, toolBox }, config);
+  const orchestrator = new Orchestrator({ perception, toolBox, confirmator }, config);
   return { orchestrator, memory, perception, toolBox, driver };
 }

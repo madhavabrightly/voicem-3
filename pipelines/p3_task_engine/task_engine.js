@@ -458,11 +458,13 @@ export class TaskEngine extends EventEmitter {
 
   /** 247, 248, 249. One ACT → OBSERVE → VERIFY cycle for a node. */
   async _attempt(task, node, { perceptionMethod, tool, attempt = 1 } = {}) {
-    const { taskId, tracker, events, graph } = task;
+    const { taskId, tracker, events, graph, spec } = task;
     const step = node.step;
 
-    // Fail-closed gating: verify identity compatibility before mutating actions
-    if (MUTATING_STEPS.has(step.type) && this.perception && typeof this.perception.canMutate === "function" && spec?.application) {
+    // Fail-closed gating: verify identity compatibility before mutating actions.
+    // Skip for open_app — the target application isn't active yet, so the gate
+    // would always refuse. open_app is verified by its own verification node.
+    if (MUTATING_STEPS.has(step.type) && step.type !== "open_app" && this.perception && typeof this.perception.canMutate === "function" && spec?.application) {
       const gate = this.perception.canMutate(spec.application);
       if (!gate.allowed) {
         events.emitFailure("mutation_gate_blocked", { taskId, node: node.id, step: step.type, reason: gate.reason });

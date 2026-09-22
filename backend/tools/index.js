@@ -43,6 +43,10 @@ export class ToolBox {
         return this.findElement(step.target);
       case "click":
         return this.click(step.target);
+      case "double_click":
+        return this.doubleClick(step.target);
+      case "right_click":
+        return this.rightClick(step.target);
       case "type":
         return this.type(step);
       case "press":
@@ -62,21 +66,56 @@ export class ToolBox {
     }
   }
 
+  resolveTargetElement(model, target) {
+    if (!target) return null;
+    const t = String(target).trim();
+    // 1. Exact or alias match via model.find
+    let found = model.find({ name: t });
+    if (found.length === 0) found = model.find({ type: t });
+    if (found.length === 0) found = model.find({ name: t, type: t });
+
+    // 2. Substring or token match across all elements (OCR text, UIA buttons/links, Vision)
+    if (found.length === 0 && Array.isArray(model.elements)) {
+      const lower = t.toLowerCase();
+      found = model.elements.filter((e) => {
+        const name = String(e.name || "").toLowerCase();
+        const role = String(e.role || "").toLowerCase();
+        const type = String(e.type || "").toLowerCase();
+        return name.includes(lower) || lower.includes(name) || role.includes(lower) || type.includes(lower);
+      });
+    }
+
+    if (found.length === 0) return null;
+    found.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+    return found[0];
+  }
+
   async findElement(description) {
     const model = await this.perception.perceive({ intent: `find ${description}` });
-    // match by type first, then by name, then combined
-    let found = model.find({ type: description });
-    if (found.length === 0) found = model.find({ name: description });
-    if (found.length === 0) found = model.find({ type: description, name: description });
-    if (found.length === 0) return ToolResult.fail("find_element", `no element for "${description}" found`, { model: model.toJSON() });
-    return ToolResult.ok("find_element", { element: found[0], candidates: found });
+    const el = this.resolveTargetElement(model, description);
+    if (!el) return ToolResult.fail("find_element", `no element for "${description}" found`, { model: model.toJSON() });
+    return ToolResult.ok("find_element", { element: el, candidates: [el] });
   }
 
   async click(target) {
     const model = await this.perception.perceive({ intent: `click ${target}` });
-    const found = model.find({ name: target });
-    if (found.length === 0) return ToolResult.fail("click", `no clickable element for "${target}"`, { model: model.toJSON() });
-    return this.mouse.click(found[0].coordinates || found[0]);
+    const el = this.resolveTargetElement(model, target);
+    if (!el) return ToolResult.fail("click", `no clickable element for "${target}"`, { model: model.toJSON() });
+    return this.mouse.click(el.coordinates || el);
+  }
+
+  async doubleClick(target) {
+    const model = await this.perception.perceive({ intent: `double click ${target}` });
+    const el = this.resolveTargetElement(model, target);
+    if (!el) return ToolResult.fail("double_click", `no element for "${target}"`, { model: model.toJSON() });
+    return this.mouse.doubleClick(el.coordinates || el);
+  }
+
+  async rightClick(target) {
+    const model = await this.perception.perceive({ intent: `right click ${target}` });
+    const el = this.resolveTargetElement(model, target);
+    if (!el) return ToolResult.fail("right_click", `no element for "${target}"`, { model: model.toJSON() });
+    return this.mouse.rightClick(el.coordinates || el);
   }
 
   /**
@@ -96,22 +135,30 @@ export class ToolBox {
 
     if (step.target && step.args?.refocus) {
       const model = await this.perception.perceive({ intent: `type into ${step.target}` });
-      const found = model.find({ name: step.target });
-      if (found.length > 0 && found[0].coordinates) {
-        await this.mouse.click(found[0].coordinates);
+      const el = this.resolveTargetElement(model, step.target);
+      if (el && el.coordinates) {
+        await this.mouse.click(el.coordinates);
       }
     }
 
     return this.keyboard.type(text, {
-      // Search/input targets get select-all first: a retry then replaces
-      // the field content instead of appending to it.
       clearFirst: step.target === "search_box" || step.args?.clearFirst === true,
     });
   }
 
   async readScreen() {
     const model = await this.perception.perceive({ intent: "read screen" });
-    return ToolResult.ok("read_screen", model.toJSON());
+    const data = model.toJSON ? model.toJSON() : model;
+    const app = data.application || data.environment?.proc || "current window";
+    const title = data.environment?.title || "";
+    const visibleTexts = (data.elements || [])
+      .map((e) => e.name)
+      .filter((n) => typeof n === "string" && n.trim().length > 1)
+      .slice(0, 15);
+    const summary = title
+      ? `Active window is ${title}. Visible items: ${visibleTexts.slice(0, 8).join(", ")}.`
+      : `App ${app} showing ${visibleTexts.length} visible items.`;
+    return ToolResult.ok("read_screen", { ...data, summary, visibleTexts });
   }
 
   /**

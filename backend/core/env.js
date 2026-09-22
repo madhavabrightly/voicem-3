@@ -31,5 +31,38 @@ export function loadEnv(filePath) {
       // Ignore if file is missing or unreadable
     }
   }
+  ensureAudioPath(rootDir);
   return process.env;
+}
+
+/**
+ * Auto-discover SoX binary and ensure it is in process.env.PATH.
+ */
+function ensureAudioPath(rootDir) {
+  if (process.platform !== "win32") return;
+  const localAppData = process.env.LOCALAPPDATA || "";
+  const soxCandidates = [
+    join(rootDir, "runtime", "sox"),
+    join(rootDir, "app", "runtime", "sox"),
+    join(rootDir, "../runtime", "sox"),
+    join(localAppData, "Microsoft", "WinGet", "Packages", "ChrisBagwell.SoX_Microsoft.Winget.Source_8wekyb3d8bbwe", "sox-14.4.2"),
+    join(localAppData, "Microsoft", "WindowsApps"),
+    "C:\\ProgramData\\chocolatey\\bin",
+    "C:\\Program Files (x86)\\sox-14-4-2",
+    "C:\\Program Files\\sox-14-4-2",
+  ];
+
+  for (const dir of soxCandidates) {
+    try {
+      const soxExe = join(dir, "sox.exe");
+      if (readFileSync(soxExe)) {
+        if (!process.env.PATH.includes(dir)) {
+          process.env.PATH = `${dir};${process.env.PATH}`;
+        }
+        break;
+      }
+    } catch {
+      // not in this candidate directory
+    }
+  }
 }

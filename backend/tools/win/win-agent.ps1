@@ -251,21 +251,37 @@ function Invoke-Ocr {
     $words = @()
     $minX = [int]::MaxValue; $minY = [int]::MaxValue
     $maxR = 0; $maxB = 0
+    $lineConfSum = 0.0
     foreach ($w in $line.Words) {
       $wr = $w.BoundingRect
       $wx = [int]$wr.X; $wy = [int]$wr.Y; $ww = [int]$wr.Width; $wh = [int]$wr.Height
-      $words += @{ text = $w.Text; x = $wx; y = $wy; w = $ww; h = $wh }
+      
+      $text = $w.Text
+      $conf = 0.8
+      $area = $ww * $wh
+      if ($area -lt 100 -or $area -gt 10000) { $conf = 0.6 }
+      elseif ($text.Length -eq 1) { $conf = 0.7 }
+      elseif ($text -match '^[a-zA-Z]+$') { $conf = 0.9 }
+      elseif ($text -match '^[a-zA-Z0-9]+$') { $conf = 0.8 }
+      
+      if ($conf -lt 0.5) { $conf = 0.5 }
+      if ($conf -gt 0.95) { $conf = 0.95 }
+      $lineConfSum += $conf
+
+      $words += @{ text = $text; x = $wx; y = $wy; w = $ww; h = $wh; confidence = $conf }
       if ($wx -lt $minX) { $minX = $wx }
       if ($wy -lt $minY) { $minY = $wy }
       if (($wx + $ww) -gt $maxR) { $maxR = $wx + $ww }
       if (($wy + $wh) -gt $maxB) { $maxB = $wy + $wh }
     }
     $lText = if ($null -ne $line.Text) { $line.Text } else { ($line.Words | ForEach-Object { $_.Text }) -join ' ' }
+    $lineConf = if ($words.Count -gt 0) { $lineConfSum / $words.Count } else { 0.5 }
     if ($words.Count -gt 0) {
       $lines += @{
         text = $lText
         x = $minX; y = $minY; w = ($maxR - $minX); h = ($maxB - $minY)
         words = $words
+        confidence = $lineConf
       }
     }
   }
@@ -283,6 +299,23 @@ function Invoke-Click([int]$x, [int]$y) {
   return @{ ok = $true; x = $x; y = $y }
 }
 
+function Invoke-DoubleClick([int]$x, [int]$y) {
+  Invoke-Click $x $y | Out-Null
+  Start-Sleep -Milliseconds 80
+  Invoke-Click $x $y | Out-Null
+  return @{ ok = $true; x = $x; y = $y; double = $true }
+}
+
+function Invoke-RightClick([int]$x, [int]$y) {
+  [void][WinAgentNative]::SetCursorPos($x, $y)
+  Start-Sleep -Milliseconds 60
+  [WinAgentNative]::mouse_event($MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, [UIntPtr]::Zero)
+  Start-Sleep -Milliseconds 40
+  [WinAgentNative]::mouse_event($MOUSEEVENTF_RIGHTUP, 0, 0, 0, [UIntPtr]::Zero)
+  Start-Sleep -Milliseconds 100
+  return @{ ok = $true; x = $x; y = $y; right = $true }
+}
+
 function Invoke-Type([string]$text) {
   $wshell = New-Object -ComObject WScript.Shell
   $escaped = $text -replace '([+^%~(){}[\]])', '{$1}'
@@ -294,16 +327,27 @@ function Invoke-Press([string]$key) {
   $wshell = New-Object -ComObject WScript.Shell
   $map = @{
     'enter'    = '{ENTER}'; 'return' = '{ENTER}'; 'escape' = '{ESC}'; 'esc' = '{ESC}'
-    'tab'      = '{TAB}'; 'backspace' = '{BACKSPACE}'; 'delete' = '{DELETE}'
+    'tab'      = '{TAB}'; 'backspace' = '{BACKSPACE}'; 'delete' = '{DELETE}'; 'del' = '{DELETE}'
     'up'       = '{UP}'; 'down' = '{DOWN}'; 'left' = '{LEFT}'; 'right' = '{RIGHT}'
     'home'     = '{HOME}'; 'end' = '{END}'; 'space' = ' '
-    'ctrl+a'   = '^a'; 'ctrl+c' = '^c'; 'ctrl+v' = '^v'; 'ctrl+f' = '^f'
+    'ctrl+a'   = '^a'; 'ctrl+c' = '^c'; 'ctrl+v' = '^v'; 'ctrl+f' = '^f'; 'ctrl+s' = '^s'
+    'ctrl+w'   = '^w'; 'ctrl+t' = '^t'; 'ctrl+z' = '^z'; 'ctrl+y' = '^y'
     'ctrl+shift+t' = '^+t'
+    'alt+f4'   = '%{F4}'; 'f4' = '{F4}'; 'f5' = '{F5}'; 'f11' = '{F11}'; 'f12' = '{F12}'
+    'alt+tab'  = '%{TAB}'
   }
-  $k = $key.ToLowerInvariant()
-  if ($map.ContainsKey($k)) { $wshell.SendKeys($map[$k]) }
-  elseif ($k -match '^ctrl\+(.+)$') { $wshell.SendKeys('^' + $Matches[1]) }
-  else { $wshell.SendKeys('{' + $key.ToUpperInvariant() + '}') }
+  $k = $key.ToLowerInvariant().Trim()
+  if ($map.ContainsKey($k)) {
+    $wshell.SendKeys($map[$k])
+  } elseif ($k -match '^ctrl\+(.+)$') {
+    $wshell.SendKeys('^' + $Matches[1])
+  } elseif ($k -match '^alt\+(.+)$') {
+    $wshell.SendKeys('%' + $Matches[1])
+  } elseif ($k -match '^shift\+(.+)$') {
+    $wshell.SendKeys('+' + $Matches[1])
+  } else {
+    $wshell.SendKeys('{' + $key.ToUpperInvariant() + '}')
+  }
   return @{ ok = $true; key = $key }
 }
 
@@ -338,6 +382,16 @@ while ($true) {
         $xy = $arg -split '\s+'
         if ($xy.Count -lt 2) { Emit 'click' $null $false 'usage: click <x> <y>' }
         else { Emit 'click' (Invoke-Click ([int]$xy[0]) ([int]$xy[1])) }
+      }
+      'double_click' {
+        $xy = $arg -split '\s+'
+        if ($xy.Count -lt 2) { Emit 'double_click' $null $false 'usage: double_click <x> <y>' }
+        else { Emit 'double_click' (Invoke-DoubleClick ([int]$xy[0]) ([int]$xy[1])) }
+      }
+      'right_click' {
+        $xy = $arg -split '\s+'
+        if ($xy.Count -lt 2) { Emit 'right_click' $null $false 'usage: right_click <x> <y>' }
+        else { Emit 'right_click' (Invoke-RightClick ([int]$xy[0]) ([int]$xy[1])) }
       }
       'type'   { Emit 'type' (Invoke-Type $arg) }
       'press'  { Emit 'press' (Invoke-Press $arg) }

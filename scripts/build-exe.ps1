@@ -80,6 +80,7 @@ if (-not $SkipAppCopy) {
 
   $required = @(
     "voice\start.js", "ui\screenai-voice-ui.ps1", "backend\real_agent.js",
+    "voice\windows_speech.js", "voice\windows_speech.ps1", "backend\perception\vision\vision_sensor.js",
     "node_modules\assemblyai\dist", "node_modules\onnxruntime-node\dist", "node_modules\pngjs"
   )
   foreach ($rel in $required) {
@@ -92,8 +93,8 @@ if (-not $SkipAppCopy) {
 }
 
 # --- 3. optional bundled Node runtime --------------------------------------
+$runtimeDir = Join-Path $outDir "runtime"
 if ($BundleNode) {
-  $runtimeDir = Join-Path $outDir "runtime"
   New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
   $node = (Get-Command node -ErrorAction Stop).Source
   Copy-Item $node (Join-Path $runtimeDir "node.exe") -Force
@@ -102,28 +103,59 @@ if ($BundleNode) {
   Write-Host "[build] node NOT bundled - the launcher uses node.exe from PATH"
 }
 
+# --- 3b. bundle SoX audio recorder (portable) -------------------------------
+$soxCandidates = @(
+  (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages\ChrisBagwell.SoX_Microsoft.Winget.Source_8wekyb3d8bbwe\sox-14.4.2"),
+  "C:\Program Files (x86)\sox-14-4-2",
+  "C:\Program Files\sox-14-4-2"
+)
+$soxSrc = $soxCandidates | Where-Object { Test-Path (Join-Path $_ "sox.exe") } | Select-Object -First 1
+if ($soxSrc) {
+  $soxDest = Join-Path $runtimeDir "sox"
+  New-Item -ItemType Directory -Force -Path $soxDest | Out-Null
+  Copy-Item (Join-Path $soxSrc "*") $soxDest -Recurse -Force
+  if (-not $SkipAppCopy) {
+    $appSoxDest = Join-Path $appDir "runtime\sox"
+    New-Item -ItemType Directory -Force -Path $appSoxDest | Out-Null
+    Copy-Item (Join-Path $soxSrc "*") $appSoxDest -Recurse -Force
+  }
+  Write-Host "[build] bundled SoX audio utility -> runtime\sox"
+} else {
+  Write-Host "[build] SoX source directory not found - SoX will rely on PATH"
+}
+
 # --- 4. portable README -----------------------------------------------------
 $readme = @"
 Screen-AI Voice - portable build
 ================================
 
 Run:  double-click ScreenAI-Voice.exe
+Hotkey: Press Ctrl+Space to activate the floating voice core.
+
+Voice Modes:
+  1. Offline / Local Mode (Default - zero configuration):
+     Uses the built-in Windows Speech Recognition engine and SpeechSynthesizer.
+     Works immediately out-of-the-box with NO API key, zero cost, and no internet.
+
+  2. Cloud Streaming Mode (AssemblyAI):
+     Add ASSEMBLYAI_API_KEY in app\env\.env or as a system environment variable.
+     Provides ultra-accurate streaming transcription and conversational AI.
 
 Layout:
   ScreenAI-Voice.exe    launcher (process manager; no application logic)
-  app\                  the existing Screen-AI application (Node + WPF UI)
-  runtime\node.exe      optional bundled Node runtime
+  app\                  the Screen-AI application (Node + WPF UI + Perception + Tools)
+  runtime\node.exe      bundled Node.js runtime (with -BundleNode)
+  runtime\sox\          bundled SoX audio capture utility
   logs\                 created on first run (screenai-voice.log)
 
 Requirements:
   - Windows 10/11 x64
-  - Node.js 18+ on PATH  (unless runtime\node.exe is bundled)
-  - SoX on PATH for microphone capture
-  - ASSEMBLYAI_API_KEY in the environment or in app\env\.env
+  - Node.js 18+ on PATH (unless bundled with -BundleNode)
+  - Microphone connected and enabled
 
 Flags:
-  ScreenAI-Voice.exe --debug       run through a visible console
-  ScreenAI-Voice.exe --simulate    development: scripted transcript (real agent)
+  ScreenAI-Voice.exe --debug       run with a visible console window for logs
+  ScreenAI-Voice.exe --simulate    development test: scripted transcript (real agent)
 
 Uninstall:
   Stop the app (right-click the floating core -> Quit), then delete this folder.

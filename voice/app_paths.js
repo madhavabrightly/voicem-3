@@ -39,5 +39,6 @@ export function parseStartArgs(argv = []) {
   return {
     simulate: args.has("--simulate"),
     debug: args.has("--debug"),
+    local: args.has("--local") || args.has("--offline"),
   };
 }

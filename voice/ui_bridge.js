@@ -158,6 +158,7 @@ export class VoiceUiBridge {
     smoothing = 0.35,
     throttleMs = 33,
     successHoldMs = 1400,
+    autoRelisten = false,
   } = {}) {
     this.onReady = onReady;
     this.onQuit = onQuit;
@@ -169,6 +170,7 @@ export class VoiceUiBridge {
     this.smoothing = smoothing;
     this.throttleMs = throttleMs;
     this.successHoldMs = successHoldMs;
+    this.autoRelisten = autoRelisten;
 
     this.state = UI_STATES.IDLE;
     this.amplitude = 0;
@@ -191,7 +193,15 @@ export class VoiceUiBridge {
       if (!text) return "";
       this._sendTranscript(text, true);
       const result = await this._runAgent(text);
-      return result?.spoken ?? "";
+      const spoken = result?.spoken ?? "";
+      if (spoken) {
+        if (typeof this.voice.speak === "function") {
+          this.voice.speak(spoken);
+        } else if (typeof this.voice.tts === "function") {
+          this.voice.tts(spoken).catch(() => {});
+        }
+      }
+      return spoken;
     });
 
     // Subscribe to REAL agent progress (step events) for the working animation.
@@ -289,6 +299,15 @@ export class VoiceUiBridge {
       this._setState(UI_STATES.SUCCESS, "Done");
       this._timers.add(
         setTimeout(async () => {
+          if (this.autoRelisten && this.voice && typeof this.voice.start === "function") {
+            try {
+              await this.voice.start();
+              this._setState(UI_STATES.LISTENING, "Listening");
+              return;
+            } catch {
+              // fallback to idle if restart failed
+            }
+          }
           await this._stopVoice();
           if (this.state === UI_STATES.SUCCESS) this._setState(UI_STATES.IDLE, "");
         }, this.successHoldMs)

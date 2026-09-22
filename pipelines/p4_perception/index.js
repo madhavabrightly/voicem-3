@@ -79,12 +79,14 @@ export class P4Perception {
    */
   constructor({
     driver = null,
+    uiaDriver = null,
     sensors = null,
     config = {},
     clock = () => Date.now(),
     hooks = {},
   } = {}) {
     this.driver = driver;
+    this.uiaDriver = uiaDriver;
     this.config = config;
     this.clock = clock;
     this.settleMs = config?.agent?.verifySettleMs ?? DEFAULT_SETTLE_MS;
@@ -98,7 +100,7 @@ export class P4Perception {
       validityWindowMs: config?.perception?.validityWindowMs ?? DEFAULT_VALIDITY_WINDOW_MS,
       clock,
     });
-    this.sensorManager = new MultiSensorManager({ driver, foreground: hooks.foreground || (() => this.envProbe.probe()) });
+    this.sensorManager = new MultiSensorManager({ driver, uiaDriver, foreground: hooks.foreground || (() => this.envProbe.probe()) });
     this.observer = new ObserverEngine({
       sensorManager: this.sensorManager,
       environmentProbe: this.envProbe,
@@ -162,7 +164,14 @@ export class P4Perception {
       if (ocrLines.length > 0) {
         const classified = classifyWhatsAppScreen(ocrLines, env.bounds, env);
         if (classified && classified.elements && classified.elements.length > 0) {
-          elements = [...elements.filter((e) => e.source !== "ocr"), ...classified.elements];
+          // Strip stale ownership from classified elements — classifyWhatsAppScreen
+          // creates an internal ScreenModel that auto-stamps with empty environment.
+          // The final ScreenModel below will re-stamp with the real env (hwnd, pid).
+          const stripped = classified.elements.map((e) => {
+            const { ownership, ...rest } = e;
+            return rest;
+          });
+          elements = [...elements.filter((e) => e.source !== "ocr"), ...stripped];
           screen = classified.screen;
         }
       }

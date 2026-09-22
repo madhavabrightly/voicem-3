@@ -148,7 +148,10 @@ export class MultiSensorManager {
       : driver && typeof driver.scan === "function"
       ? new RealUiaSensor({ driver, foreground })
       : null;
-    this.paddleOcrSensor = new PaddleOcrSensor();
+    this.paddleOcrSensor = new PaddleOcrSensor({
+      capture: driver && typeof driver.capture === "function" ? driver.capture.bind(driver) : null,
+      foreground
+    });
   }
 
   /**
@@ -194,6 +197,7 @@ export class MultiSensorManager {
     }
 
     // 2. OCR Scan (307–318, 395) with bounded retry
+    let ocrHandled = false;
     if (this.driver && typeof this.driver.ocr === "function") {
       let ocrRes = null;
       for (let ocrAttempt = 1; ocrAttempt <= 2; ocrAttempt++) {
@@ -206,6 +210,7 @@ export class MultiSensorManager {
         }
       }
       if (ocrRes?.success && ocrRes.lines?.length > 0) {
+        ocrHandled = true;
         if (primarySource === "unknown") primarySource = "ocr";
         for (const line of ocrRes.lines) {
           const norm = normalizeCoordinates(line);
@@ -215,11 +220,29 @@ export class MultiSensorManager {
             role: "text",
             bbox: norm.bbox,
             coordinates: norm.coordinates,
-            confidence: 0.8,
+            confidence: line.confidence !== undefined ? line.confidence : 0.8,
             source: "ocr",
             words: line.words || [],
           });
         }
+      }
+    }
+
+    if (!ocrHandled && this.paddleOcrSensor) {
+      try {
+        const paddleModel = await this.paddleOcrSensor.read();
+        if (paddleModel && paddleModel.elements && paddleModel.elements.length > 0) {
+          if (primarySource === "unknown") primarySource = "paddle";
+          for (const el of paddleModel.elements) {
+            rawElements.push({
+              ...el,
+              source: "paddle",
+              confidence: calculateElementConfidence({ ...el, source: "paddle" }),
+            });
+          }
+        }
+      } catch {
+        // Paddle fail
       }
     }
 

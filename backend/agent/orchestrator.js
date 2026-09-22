@@ -154,10 +154,18 @@ export class Orchestrator {
   }
 
   _finalize(task, final) {
+    let spoken = final.success ? "Done." : `Sorry, it did not work. ${final.error || ""}`;
+    // If read_screen was the sole/primary task (e.g. "read screen"), speak the screen summary
+    if (final.success && task.executed.length === 1 && task.executed[0].step === "read_screen") {
+      const exec = task.executed[0];
+      if (exec.result?.data?.summary) {
+        spoken = exec.result.data.summary;
+      }
+    }
     return {
       task: task.toJSON(),
       final: final.toJSON(),
-      spoken: final.success ? "Done." : `Sorry, it did not work. ${final.error || ""}`,
+      spoken,
     };
   }
 }
