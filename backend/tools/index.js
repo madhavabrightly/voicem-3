@@ -37,6 +37,8 @@ export class ToolBox {
     switch (step.type) {
       case "open_app":
         return this.apps.open(step.target);
+      case "close_app":
+        return this.apps.close(step.target);
       case "focus":
         return this.apps.focus(step.target);
       case "find_element":

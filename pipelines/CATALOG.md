@@ -551,7 +551,34 @@ Tests: `tests/p4_perception_pipeline.test.js` — tickets **385–400** numbered
 ---
 
 ## P5: Computer Action Pipeline (Tickets 401–500)
-401. Initialize Windows driver.
+**Status: Implemented — verified against deterministic unit fixtures and the full test suite.**
+
+Core Invariants:
+- **WIN32 NATIVE ONLY**: All input dispatch (click, type, press, scroll) routes through Win32 `user32.dll` via `win-agent.ps1` (`SendInput`, `SendKeys`, `mouse_event`). Zero Python.
+- **FAIL-CLOSED**: A failed action returns a failure `ToolResult`, never a false success.
+- **DETERMINISTIC STRUCTURED OUTPUT**: Every tool call returns a JSON-serializable `ToolResult` with `{ success, action, data, error, timestamp }`.
+- **SCHEMA-VALIDATED**: `validateToolResult()` rejects malformed payloads at pipeline boundaries.
+- **DELEGATION NOT DUPLICATION**: P5 imports P4's perception interface for target resolution; never duplicates perception logic.
+
+Implementation map:
+- `backend/tools/index.js` — `ToolBox`: `open_app`, `click`, `type`, `press`, `scroll`, `read_screen`, `wait`, `verify`, `recover` (tickets 401–492)
+- `backend/tools/mouse.js` — `Mouse.click()`, `Mouse.scroll()` — Win32 `SendInput` / `mouse_event` (tickets 409–422)
+- `backend/tools/keyboard.js` — `Keyboard.type()`, `Keyboard.press()` — Win32 `SendKeys` / `SendInput` (tickets 411–416)
+- `backend/tools/applications.js` — `Applications.open()`, `Applications.focus()`, `Applications.close()` (tickets 401–406, 459–468)
+- `backend/tools/screen.js` — `Screen.wait()` — perception-backed condition polling (tickets 443–450)
+- `backend/tools/win/win_driver.js` — `WindowsDriver`: persistent PowerShell subprocess for all Win32 ops (tickets 401–492)
+- `backend/core/result.js` — `ToolResult` schema: `ok()` / `fail()` (tickets 491–492)
+- `pipelines/p5_app_lifecycle/` — Application lifecycle sub-pipeline: resolve → launch → startup probe → session → ready (tickets 418–500)
+  - `app_resolver.js` — alias resolution, candidate ranking, ambiguity rejection, launch request (tickets 418–445)
+  - `app_engine_driver.js` — Node.js driver for app_engine.ps1 + startup_probe.ps1 (tickets 401–496)
+  - `app_session.js` — ownership, evidence levels, state machine, `markReady()`, `APPLICATION_READY` event (tickets 479–500)
+  - `startup_classifier.js` — startup phase detection, stability calculation, recovery (tickets 451–488)
+- `pipelines/p5_actions/index.js` — Formal P5 pipeline entry point: re-exports all P5 modules, `P5_ACTION_TYPES`, `validateToolResult`, `buildActionAuditEntry` (tickets 489–500)
+- `native/app_engine/app_engine.ps1` — PS1 native agent: Win32 app discovery, launch, foreground (tickets 401–449)
+- `native/app_engine/startup_probe.ps1` — PS1 startup probe: startup phase, UIA readiness, dialog detection (tickets 451–496)
+
+Tests: `tests/p5_action_pipeline.test.js` — tickets **493–500** numbered, plus full coverage for 401–492.
+
 402. Detect target application.
 403. Open application.
 404. Verify application launch.

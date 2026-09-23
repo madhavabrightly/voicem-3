@@ -620,3 +620,49 @@ voice-failure path.
 * Full suite: `node --test "tests/**/*.test.js"` → **129 passed, 0 failed,
   0 skipped** (98 before this pipeline).
 
+## 10. P5: Computer Action Pipeline (Tickets 401–500)
+
+Milestone: the complete computer action pipeline — Win32 input dispatch (click, type, press,
+scroll), application lifecycle (resolve → launch → startup → session → ready), ToolResult
+schema, audit logging, and 0% Python. Lives in `pipelines/p5_actions/` (formal entry point)
++ `pipelines/p5_app_lifecycle/` (app lifecycle sub-pipeline) + `backend/tools/` (ToolBox).
+
+### What Was Done
+
+- **`pipelines/p5_actions/index.js`** — Formal P5 pipeline entry point matching the catalog.
+  Re-exports all P5 public APIs, adds `P5_ACTION_TYPES` registry, `validateToolResult()`, and
+  `buildActionAuditEntry()` (JSON-serializable audit record per tool dispatch). **0% Python.**
+- **Win32 input dispatch**: `click` → Win32 `SendInput`; `type` → `SendKeys`; `press` → single
+  or compound key (e.g. `ctrl+a`); `scroll` → mouse wheel. All through a persistent PS1
+  subprocess (`win-agent.ps1`) — no per-action process-spawn overhead.
+- **Application lifecycle** (`pipelines/p5_app_lifecycle/`): `app_resolver.js` (alias resolution,
+  candidate ranking, ambiguity rejection), `app_engine_driver.js` + `app_engine.ps1` (Win32
+  discovery/launch), `startup_probe.ps1` (phase/UIA/responsiveness), `app_session.js`
+  (`AppSession`: ownership stamping → PROVEN/SUPPORTED/INFERRED evidence, `markReady()` →
+  `APPLICATION_READY` event).
+- **ToolResult schema** (`backend/core/result.js`): `{ success, action, data, error, timestamp }`
+  — deterministic, JSON-serializable, never throws.
+
+### Test Results
+
+#### P5 pipeline unit tests
+**Result:** **PASS**
+* **Command:** `node --test tests/p5_action_pipeline.test.js` → **48/48**.
+* **Validation:**
+  - `normalizeName`, `resolveAlias`, `rankCandidates`, `scoreCandidate`, `checkAmbiguity`,
+    `confirmTarget`, `prepareLaunchRequest` all verified with deterministic fixtures.
+  - `AppSession.establishOwnership()` upgrades evidence to PROVEN on `matched=true` result;
+    `markReady()` emits `APPLICATION_READY` event with `sessionId` in payload.
+  - `click` routes resolved coordinates via `driver.click(x, y)` (no Python); fails closed
+    when no element found (never a false success).
+  - `type` with `clearFirst` dispatches `ctrl+a` before text; with `refocus` clicks target first.
+  - `press`, `scroll` dispatch via driver with direction/key preserved in ToolResult.
+  - `validateToolResult` passes valid results; rejects non-boolean success, empty action, null data.
+  - `buildActionAuditEntry` produces fully JSON-serializable records tagged `pipeline: "P5"`.
+  - Contract tests 493–500: click, type, keyboard, scroll, open_app, focus, recovery, and
+    full 6-action pipeline sequence all pass schema validation.
+
+#### Regression
+**Result:** **PASS**
+* Full suite: `node --test "tests/*.test.js"` → **177 passed, 0 failed, 0 skipped**
+  (129 before this pipeline).
